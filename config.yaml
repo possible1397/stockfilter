@@ -1,0 +1,41 @@
+# 台股三角收斂篩選器 — 全域設定檔
+# 修改此檔案即可調整所有策略參數，無需修改程式碼。
+
+scanner:
+  force_safe_trade: true          # 是否強制要求大盤環境安全 (市場分數 >= market_score_threshold)
+  market_score_threshold: 40      # 大盤安全門檻 (0-100)
+  top_sector_count: 10            # 族群分析 Top N
+  download_workers: 8             # 批次下載執行緒數
+  db_path: stock_data.db          # SQLite 資料庫路徑
+  output_dir: output              # 報表與圖表輸出目錄
+  chart_cleanup_days: 14          # 自動清理幾天前的圖表
+
+pattern:
+  order: 5                        # argrelextrema 鄰近範圍 (值越大找出的高低點越少但更具代表性)
+  min_points: 3                   # 最少需要幾個高點/低點
+  min_bars: 20                    # 三角形最少橫跨幾根 K 線
+  convergence_threshold: 0.3      # 收斂程度門檻 (< 此值才符合)
+  long_only: true                 # 只做多
+  trend_filter: true              # 是否要求大趨勢偏多 (收盤 > 50MA > 200MA)
+  volume_dryup: true              # 是否要求尾端量縮
+
+cleaner:
+  min_vol_lots: 500               # 5 日均量最低門檻 (張)
+  min_bars: 60                    # 最少需要幾根 K 線
+
+backtest:
+  score_threshold: 60             # 進場評分門檻
+  max_positions: 5                # 最大同時持倉數
+  position_size: 0.2              # 每筆倉位佔資金比例
+  stop_loss: 0.07                 # 停損比例
+  take_profit: 0.20               # 停利比例
+  max_hold_days: 30               # 最大持倉天數
+  commission: 0.001425            # 手續費
+  tax: 0.003                      # 交易稅
+  slippage: 0.001                 # 滑價
+
+logging:
+  level: INFO                     # DEBUG / INFO / WARNING / ERROR
+  log_dir: logs                   # log 檔案輸出目錄
+  max_bytes: 10485760             # 每個 log 檔最大 10 MB
+  backup_count: 5                 # 保留幾份歷史 log
