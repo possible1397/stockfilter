@@ -1,0 +1,96 @@
+2026-03-22 15:32:49 [INFO] __main__: [模式] 全台股掃描模式，正在取得清單...
+2026-03-22 15:32:49 [INFO] data.stock_list: [StockList] 從 TWSE/TPEX 即時抓取全台股清單...
+2026-03-22 15:32:49 [WARNING] data.stock_list: SSL 驗證失敗，以不驗證模式重試: https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL
+2026-03-22 15:41:19 [INFO] __main__: [模式] 樣本測試模式 (5 檔)
+2026-03-22 15:41:19 [INFO] __main__: === 台股精準全自動評分篩選器 v2 (反轉邏輯) | 2026-03-22 15:41:19 ===
+2026-03-22 15:41:19 [INFO] __main__: [Step 0] 執行大盤環境偵測器 (連續評分)...
+2026-03-22 15:41:25 [INFO] __main__:  [+] 市場環境分數: 82.3/100
+2026-03-22 15:41:25 [INFO] __main__:      TSE: 位置=28 斜率=26 動能=16
+2026-03-22 15:41:25 [INFO] __main__:      OTC: 位置=40 斜率=30 動能=30
+2026-03-22 15:41:25 [INFO] core.supply_chain: [SupplyChain] 載入供應鏈資料 (40 條產業鏈，更新時間: 2026-03-20 23:25:18)
+2026-03-22 15:41:25 [INFO] __main__: [Step 1] 批次下載 K 線資料 (標的數: 5)...
+2026-03-22 15:41:25 [INFO] data.fetcher: [Fetcher] 使用 8 執行緒下載 5 檔資料...
+2026-03-22 15:41:25 [INFO] data.fetcher: [Fetcher] 進度: 5/5 (100.0%)
+2026-03-22 15:41:25 [INFO] __main__: [Step 2] 資料清洗 (過濾低流動性與樣本不足標的)...
+2026-03-22 15:41:25 [INFO] data.cleaner: [DataCleaner] 從 5 檔過濾後剩餘 5 檔合格標的
+2026-03-22 15:41:25 [INFO] __main__: [Step 3] 全市場三角收斂掃描 (共 5 檔，不過濾族群)...
+2026-03-22 15:41:25 [INFO] __main__:   [+] 發現 0 檔收斂標的
+2026-03-22 15:41:25 [INFO] __main__:   本次掃描未找到任何收斂標的。
+2026-03-22 15:42:12 [INFO] __main__: [模式] 全台股掃描模式，正在取得清單...
+2026-03-22 15:42:12 [INFO] data.stock_list: [StockList] 從 TWSE/TPEX 即時抓取全台股清單...
+2026-03-22 15:42:13 [WARNING] data.stock_list: SSL 驗證失敗，以不驗證模式重試: https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL
+2026-03-22 15:42:13 [INFO] data.stock_list:   [TWSE] 取得上市股票: 1187 檔
+2026-03-22 15:42:15 [WARNING] data.stock_list: SSL 驗證失敗，以不驗證模式重試: https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap68_O
+2026-03-22 15:42:15 [WARNING] data.stock_list:   [TPEX] https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap68_O 失敗: Expecting value: line 1 column 1 (char 0)
+2026-03-22 15:42:16 [WARNING] data.stock_list: SSL 驗證失敗，以不驗證模式重試: https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes
+2026-03-22 15:42:17 [INFO] data.stock_list:   [TPEX] 取得上櫃股票: 886 檔 (來源: https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes)
+2026-03-22 15:42:17 [INFO] data.stock_list: [StockList] 合計 2073 檔，快取已存至: c:\Users\Terry\PycharmProjects\Stock\stock_list_cache.json
+2026-03-22 15:42:17 [INFO] __main__: === 台股精準全自動評分篩選器 v2 (反轉邏輯) | 2026-03-22 15:42:17 ===
+2026-03-22 15:42:17 [INFO] __main__: [Step 0] 執行大盤環境偵測器 (連續評分)...
+2026-03-22 15:42:18 [INFO] __main__:  [+] 市場環境分數: 82.3/100
+2026-03-22 15:42:18 [INFO] __main__:      TSE: 位置=28 斜率=26 動能=16
+2026-03-22 15:42:18 [INFO] __main__:      OTC: 位置=40 斜率=30 動能=30
+2026-03-22 15:42:18 [INFO] core.supply_chain: [SupplyChain] 載入供應鏈資料 (40 條產業鏈，更新時間: 2026-03-20 23:25:18)
+2026-03-22 15:42:18 [INFO] __main__: [Step 1] 批次下載 K 線資料 (標的數: 2073)...
+2026-03-22 15:42:18 [INFO] data.fetcher: [Fetcher] 使用 8 執行緒下載 2073 檔資料...
+2026-03-22 15:42:19 [INFO] data.fetcher: [Fetcher] 進度: 100/2073 (4.8%)
+2026-03-22 15:42:20 [INFO] data.fetcher: [Fetcher] 進度: 200/2073 (9.6%)
+2026-03-22 15:42:21 [INFO] data.fetcher: [Fetcher] 進度: 300/2073 (14.5%)
+2026-03-22 15:42:22 [INFO] data.fetcher: [Fetcher] 進度: 400/2073 (19.3%)
+2026-03-22 15:42:23 [INFO] data.fetcher: [Fetcher] 進度: 500/2073 (24.1%)
+2026-03-22 15:42:24 [INFO] data.fetcher: [Fetcher] 進度: 600/2073 (28.9%)
+2026-03-22 15:42:25 [INFO] data.fetcher: [Fetcher] 進度: 700/2073 (33.8%)
+2026-03-22 15:42:26 [INFO] data.fetcher: [Fetcher] 進度: 800/2073 (38.6%)
+2026-03-22 15:42:27 [INFO] data.fetcher: [Fetcher] 進度: 900/2073 (43.4%)
+2026-03-22 15:42:28 [INFO] data.fetcher: [Fetcher] 進度: 1000/2073 (48.2%)
+2026-03-22 15:42:28 [INFO] data.fetcher: [Fetcher] 進度: 1100/2073 (53.1%)
+2026-03-22 15:42:29 [INFO] data.fetcher: [Fetcher] 進度: 1200/2073 (57.9%)
+2026-03-22 15:42:30 [INFO] data.fetcher: [Fetcher] 進度: 1300/2073 (62.7%)
+2026-03-22 15:42:31 [INFO] data.fetcher: [Fetcher] 進度: 1400/2073 (67.5%)
+2026-03-22 15:42:33 [INFO] data.fetcher: [Fetcher] 進度: 1500/2073 (72.4%)
+2026-03-22 15:42:34 [INFO] data.fetcher: [Fetcher] 進度: 1600/2073 (77.2%)
+2026-03-22 15:42:35 [INFO] data.fetcher: [Fetcher] 進度: 1700/2073 (82.0%)
+2026-03-22 15:42:36 [INFO] data.fetcher: [Fetcher] 進度: 1800/2073 (86.8%)
+2026-03-22 15:42:38 [INFO] data.fetcher: [Fetcher] 進度: 1900/2073 (91.7%)
+2026-03-22 15:42:39 [INFO] data.fetcher: [Fetcher] 進度: 2000/2073 (96.5%)
+2026-03-22 15:42:40 [INFO] data.fetcher: [Fetcher] 進度: 2073/2073 (100.0%)
+2026-03-22 15:42:40 [INFO] __main__: [Step 2] 資料清洗 (過濾低流動性與樣本不足標的)...
+2026-03-22 15:42:40 [INFO] data.cleaner: [DataCleaner] 從 2073 檔過濾後剩餘 935 檔合格標的
+2026-03-22 15:42:40 [INFO] __main__: [Step 3] 全市場三角收斂掃描 (共 935 檔，不過濾族群)...
+2026-03-22 15:42:41 [INFO] __main__:   [+] 發現 2 檔收斂標的
+2026-03-22 15:42:41 [INFO] __main__: [Step 4] 收斂密度聚合分析 (反轉邏輯: 密度高 → 族群即將輪動)...
+2026-03-22 15:42:41 [INFO] core.convergence_scanner: 
+  ╔══════════════════════════════════════════════════╗
+  ║         族群收斂密度排行 (輪動預測)              ║
+  ╠══════════════════════════════════════════════════╣
+  ║ [熱] 綠能           │ 密度: 33.3% │  1/  3 收斂          │ ████████████████████
+  ║      電子通路業        │ 密度:  1.8% │  1/ 55 收斂 +1突破     │ █
+  ╚══════════════════════════════════════════════════╝
+2026-03-22 15:42:41 [INFO] core.sector_rotation: [SectorRotation] 正在分析 935 檔個股的族群動能 (三維度)...
+2026-03-22 15:42:41 [INFO] __main__:   族群動能排行 (參考):
+2026-03-22 15:42:41 [INFO] __main__: 
+sector  momentum  breadth  acceleration  composite
+ 生技醫療業 17.270928 0.500000      1.227674  65.255731
+  居家生活  6.087685 1.000000      1.539486  64.198306
+  通信網路  9.883534 0.655172      1.446426  59.536421
+石化及塑橡膠  6.223953 0.200000      2.311722  54.528252
+  鋼鐵工業  4.653484 0.888889      1.258921  52.967287
+ 文化創意業  8.167689 0.285714      1.801449  51.583831
+  醫療器材  8.380044 0.000000      2.064057  48.208160
+    91  7.715722 0.666667      0.923893  46.150601
+  被動元件  7.867399 0.230769      1.524393  44.305660
+   半導體  6.294290 0.400000      1.380645  43.706832
+2026-03-22 15:42:41 [INFO] __main__: [Step 5] 機會分級 + Leader-Laggard 偵測...
+2026-03-22 15:42:41 [INFO] core.convergence_scanner: 
+  === [C] C 級機會 (2 檔) ===
+2026-03-22 15:42:41 [INFO] core.convergence_scanner:   3691.TWO   │ 綠能           [綠能/中游] │ 密度分: 100.0 
+2026-03-22 15:42:41 [INFO] core.convergence_scanner:              └ 族群收斂密度 33.3% (低)，單獨收斂風險較高。
+2026-03-22 15:42:41 [INFO] core.convergence_scanner:   2349.TW    │ 電子通路業        [電腦週邊/全產業] │ 密度分:   5.5  <- 領頭: 3135.TW, 2399.TW
+2026-03-22 15:42:41 [INFO] core.convergence_scanner:              └ 族群收斂密度 1.8% (低)，單獨收斂風險較高。
+2026-03-22 15:42:41 [INFO] __main__: [Step 6] 綜合量化評分...
+2026-03-22 15:42:41 [INFO] __main__:   [C] 2349.TW  | 總分:  60.6 | 型態: 69.3 | 密度:  5.5 | 鏈: 90.6 | 收斂: 17.0% [突破]
+2026-03-22 15:42:44 [INFO] __main__:   [C] 3691.TWO | 總分:  51.5 | 型態: 38.3 | 密度: 100.0 | 鏈: 13.4 | 收斂: 23.1%
+2026-03-22 15:42:44 [INFO] __main__: [Step 7] 輸出精選評分報表...
+2026-03-22 15:42:44 [INFO] __main__:   報表已輸出至: output\scanner_20260322.csv
+2026-03-22 15:42:44 [INFO] __main__:   掃描結果已寫入 SQLite: stock_data.db (表: scan_results)
+2026-03-22 15:42:44 [INFO] __main__: === 掃描完成！2073 檔 -> 935 檔合格 -> 2 檔收斂 (A:0 B:0 C:2) ===

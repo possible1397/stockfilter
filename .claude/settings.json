@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(venv/Scripts/python.exe scripts/run_backtest.py)",
+      "Bash(venv/Scripts/python.exe -c \":*)",
+      "Bash(ls \"c:\\\\Users\\\\Terry\\\\PycharmProjects\\\\Stock\\\\output\\\\scanner_\"*.csv)"
+    ]
+  }
+}

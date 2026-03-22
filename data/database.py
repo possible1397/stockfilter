@@ -78,7 +78,8 @@ def init_db(db_path: str = DB_PATH):
 def save_dataframe(ticker: str, df: pd.DataFrame, db_path: str = DB_PATH):
     """
     將 yfinance 回傳的 DataFrame 寫入 SQLite
-    使用 INSERT OR REPLACE 避免主鍵衝突
+    使用 INSERT OR IGNORE：已存在的日期不覆蓋，確保歷史價格穩定一致
+    （避免 yfinance 調整價格造成 pivot point 飄移、掃描結果每次不同）
     """
     if df is None or df.empty:
         return
@@ -105,7 +106,7 @@ def save_dataframe(ticker: str, df: pd.DataFrame, db_path: str = DB_PATH):
         with get_connection(db_path) as conn:
             placeholders = ', '.join('?' * len(cols))
             col_names    = ', '.join(cols)
-            sql = f"INSERT OR REPLACE INTO daily_prices ({col_names}) VALUES ({placeholders})"
+            sql = f"INSERT OR IGNORE INTO daily_prices ({col_names}) VALUES ({placeholders})"
             rows = [tuple(row) for row in df[cols].itertuples(index=False)]
             conn.executemany(sql, rows)
     except Exception as e:
