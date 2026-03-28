@@ -28,8 +28,8 @@ backtest:
   max_positions: 5                # 最大同時持倉數
   position_size: 0.2              # 每筆倉位佔資金比例
   stop_loss: 0.07                 # 停損比例
-  take_profit: 0.20               # 停利比例
-  max_hold_days: 30               # 最大持倉天數
+  take_profit: 0                  # 停利比例 (0 = 停用，由 ATR 追蹤停損自然決定出場)
+  max_hold_days: 0                # 最大持倉天數 (0 = 停用，由 ATR 追蹤停損自然決定出場)
   commission: 0.001425            # 手續費
   tax: 0.003                      # 交易稅
   slippage: 0.001                 # 滑價
@@ -39,3 +39,9 @@ logging:
   log_dir: logs                   # log 檔案輸出目錄
   max_bytes: 10485760             # 每個 log 檔最大 10 MB
   backup_count: 5                 # 保留幾份歷史 log
+
+chip:
+  trust_consecutive_days_mid: 5   # 中等連買加分門檻
+  trust_consecutive_days_high: 10 # 高度連買加分門檻
+  target_lots: 500                # 緩步吸籌穩定張數門檻
+  absorption_ratio: 0.03          # 吸籌均量佔比門檻 (> 3%)
