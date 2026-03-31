@@ -123,7 +123,14 @@ def main():
             if clean_name not in data:
                 data[clean_name] = {}
                 
-            # 保留原本若已經手動建好的 上中下游 結構，把新的股票合併進去
+            # 若該族群已有手動定義的 上/中/下游 結構，保留不動，不新增全產業節點
+            # 避免覆蓋或污染人工整理的供應鏈分類
+            manual_layers = {"上游", "中游", "下游", "製造"}
+            existing_layers = set(data[clean_name].keys())
+            if existing_layers & manual_layers:
+                print(f"  [{ic_code}] {clean_name} 已有手動結構，跳過自動更新")
+                continue
+
             # 找看看原本有沒有 "全產業" 節點，沒有就建一個
             target_level = "全產業"
             if target_level not in data[clean_name]:
@@ -131,11 +138,11 @@ def main():
                     "description": f"由 {ic_code} 頁面自動彙整的所有概念標的",
                     "tickers": []
                 }
-                
+
             existing_set = set(data[clean_name][target_level].get("tickers", []))
             new_set = set(tickers)
             merged = sorted(list(existing_set.union(new_set)))
-            
+
             data[clean_name][target_level]["tickers"] = merged
             total_tickers_found += len(new_set)
             updated_chains += 1

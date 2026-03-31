@@ -99,7 +99,23 @@ class SupplyChainEngine:
         return self._get_positions(ticker)
 
     def get_product_description(self, ticker: str) -> str:
-        """取得該股票所屬主要供應鏈節點的產品說明"""
+        """取得個股主要產品描述，優先使用鉅亨網爬取的資料"""
+        # 1. 優先用鉅亨網批次爬取的產品描述
+        product_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'data', 'product_descriptions.json'
+        )
+        if os.path.exists(product_file):
+            try:
+                with open(product_file, encoding='utf-8') as f:
+                    products = json.load(f)
+                desc = products.get(ticker, '')
+                if desc:
+                    return desc
+            except Exception:
+                pass
+
+        # 2. fallback: 供應鏈 JSON 裡的 description 欄位
         positions = self._get_positions(ticker)
         if not positions:
             return ""

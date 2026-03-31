@@ -2,7 +2,7 @@
   "_metadata": {
     "description": "台股核心產業供應鏈對照表 — 上/中/下游分類",
     "source": "TWSE 產業價值鏈資訊平台 + selected_stocks_profile.md 手動整理",
-    "last_updated": "2026-03-20 23:25:18",
+    "last_updated": "2026-03-22 16:30:44",
     "note": "tickers 使用 yfinance 格式 (.TW=上市, .TWO=上櫃)",
     "crawler_source": "https://ic.tpex.org.tw/",
     "total_industries": 40
@@ -392,6 +392,112 @@
         "8299.TW",
         "8374.TW",
         "8383.TW"
+      ]
+    }
+  },
+  "記憶體": {
+    "上游": {
+      "description": "記憶體設計/控制器 — DRAM、NOR/NAND Flash 設計與控制IC",
+      "tickers": [
+        "2344.TW",
+        "2408.TW",
+        "4919.TW"
+      ]
+    },
+    "中游": {
+      "description": "記憶體製造 — DRAM、NOR Flash 晶圓製造",
+      "tickers": [
+        "2344.TW",
+        "2408.TW"
+      ]
+    },
+    "下游": {
+      "description": "記憶體模組/SSD — 記憶體模組組裝與固態硬碟",
+      "tickers": [
+        "3260.TW",
+        "4976.TW",
+        "5245.TW"
+      ]
+    }
+  },
+  "面板顯示": {
+    "上游": {
+      "description": "驅動IC/背光模組 — 面板驅動晶片與背光源",
+      "tickers": [
+        "3034.TW",
+        "3592.TW",
+        "3598.TW"
+      ]
+    },
+    "中游": {
+      "description": "面板製造 — TFT-LCD、OLED 面板製造",
+      "tickers": [
+        "2409.TW",
+        "3481.TW"
+      ]
+    },
+    "下游": {
+      "description": "模組整合/顯示器 — 面板模組組裝與終端品牌",
+      "tickers": [
+        "2479.TW",
+        "3706.TW",
+        "2474.TW"
+      ]
+    }
+  },
+  "網通": {
+    "上游": {
+      "description": "網通晶片設計 — Wi-Fi、交換器、路由器晶片IC",
+      "tickers": [
+        "2379.TW",
+        "2454.TW",
+        "3711.TW"
+      ]
+    },
+    "中游": {
+      "description": "網通設備製造 — 企業/家用網通設備品牌與代工",
+      "tickers": [
+        "2345.TW",
+        "6285.TW",
+        "5388.TWO",
+        "3047.TW"
+      ]
+    },
+    "下游": {
+      "description": "系統整合/電信設備 — 電信基礎設施與資料中心網路",
+      "tickers": [
+        "2353.TW",
+        "4977.TW",
+        "6196.TW"
+      ]
+    }
+  },
+  "車用電子": {
+    "上游": {
+      "description": "車用IC/感測器 — 車用晶片、ADAS感測、電池管理IC",
+      "tickers": [
+        "6415.TW",
+        "6770.TWO",
+        "3661.TWO",
+        "3491.TW"
+      ]
+    },
+    "中游": {
+      "description": "車用電子零組件 — 充電模組、電源管理、車用連接器",
+      "tickers": [
+        "1536.TW",
+        "3665.TW",
+        "2308.TW",
+        "3563.TW"
+      ]
+    },
+    "下游": {
+      "description": "整車/充電基礎設施 — 電動車整車與充電站",
+      "tickers": [
+        "2201.TW",
+        "2207.TW",
+        "1605.TW",
+        "3508.TW"
       ]
     }
   },
@@ -2021,6 +2127,14 @@
         "8147.TW",
         "8240.TW",
         "8431.TW"
+      ]
+    }
+  },
+  "光學儲存媒體": {
+    "製造": {
+      "description": "光碟片/儲存媒體 — CD-R、DVD-R、Blu-ray 光碟製造與轉型業者",
+      "tickers": [
+        "2349.TW"
       ]
     }
   },

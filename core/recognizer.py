@@ -26,6 +26,18 @@ class TriangleResult:
     breakout_score: float = 0.0
     sector: str = "Unknown"
 
+    # 診斷欄位
+    reason: str = ""            # 人類可讀原因
+    failure_stage: str = ""     # TREND / VOLUME / PIVOTS / SLOPE / RATIO / SPAN / BREAKOUT / ""(通過)
+
+    # 中間指標（供診斷 CSV 使用，不影響現有邏輯）
+    diag_close: float = 0.0
+    diag_sma50: float = 0.0
+    diag_sma200: float = 0.0
+    diag_vol_ratio: float = 0.0    # 5日均量 / 50日均量
+    diag_peak_count: int = 0
+    diag_valley_count: int = 0
+
 
 class PatternRecognizer:
     """
@@ -93,14 +105,23 @@ class PatternRecognizer:
             sma50  = df[close_col].rolling(window=50).mean().iloc[-1]
             sma200 = df[close_col].rolling(window=200).mean().iloc[-1]
             current_close = df[close_col].iloc[-1]
+            result.diag_close  = float(current_close)
+            result.diag_sma50  = float(sma50)
+            result.diag_sma200 = float(sma200)
             if not (current_close > sma50 and sma50 > sma200):
+                result.failure_stage = "TREND"
+                result.reason = f"close {current_close:.2f} < SMA50 {sma50:.2f} or SMA50 < SMA200 {sma200:.2f}"
                 return result
 
         # --- 實戰濾網 2: 籌碼量縮濾網 (VCP) ---
         if self.volume_dryup and len(df) >= 50:
             vol_5d  = df[vol_col].tail(5).mean()
             vol_50d = df[vol_col].tail(50).mean()
+            vol_ratio = float(vol_5d / vol_50d) if vol_50d > 0 else 999.0
+            result.diag_vol_ratio = round(vol_ratio, 3)
             if vol_5d > vol_50d * 0.75:
+                result.failure_stage = "VOLUME"
+                result.reason = f"vol_ratio {vol_ratio:.2f} > 0.75"
                 return result
 
         peak_idx, valley_idx = self._find_pivot_points(df)
@@ -108,7 +129,12 @@ class PatternRecognizer:
         recent_peaks   = peak_idx[-5:]   if len(peak_idx)   >= self.min_points else peak_idx
         recent_valleys = valley_idx[-5:] if len(valley_idx) >= self.min_points else valley_idx
 
+        result.diag_peak_count   = len(recent_peaks)
+        result.diag_valley_count = len(recent_valleys)
+
         if len(recent_peaks) < self.min_points or len(recent_valleys) < self.min_points:
+            result.failure_stage = "PIVOTS"
+            result.reason = f"peaks={len(recent_peaks)} valleys={len(recent_valleys)}, need >={self.min_points}"
             return result
 
         peak_prices   = df[high_col].values[recent_peaks]
@@ -118,13 +144,19 @@ class PatternRecognizer:
         slope_down, intercept_down = self._linear_regression(recent_valleys.astype(float), valley_prices)
 
         if slope_up is None or slope_down is None:
+            result.failure_stage = "SLOPE"
+            result.reason = "線性回歸失敗 (數據不足)"
             return result
 
         if self.long_only:
             if not (slope_down > slope_up and slope_up <= 0.05 and slope_down > 0):
+                result.failure_stage = "SLOPE"
+                result.reason = f"slope_dn {slope_down:.5f} slope_up {slope_up:.5f} 不符做多條件"
                 return result
         else:
             if not (slope_down > slope_up and slope_up <= 0.05 and slope_down >= -0.05):
+                result.failure_stage = "SLOPE"
+                result.reason = f"slope_dn {slope_down:.5f} slope_up {slope_up:.5f} 不符條件"
                 return result
 
         start_idx = int(min(recent_peaks[0], recent_valleys[0]))
@@ -140,18 +172,27 @@ class PatternRecognizer:
         dist_end    = resist_end - support_end
 
         if dist_start <= 0:
+            result.failure_stage = "RATIO"
+            result.reason = f"dist_start {dist_start:.2f} <= 0"
             return result
 
         convergence_ratio = dist_end / dist_start
+        result.convergence_ratio = round(convergence_ratio, 4)
 
         if convergence_ratio >= self.convergence_threshold or convergence_ratio < 0:
+            result.failure_stage = "RATIO"
+            result.reason = f"ratio {convergence_ratio:.3f} >= {self.convergence_threshold} or < 0"
             return result
 
         bar_span = end_idx - start_idx
+        result.bar_span = bar_span
         if bar_span < self.min_bars:
+            result.failure_stage = "SPAN"
+            result.reason = f"span {bar_span}根 < {self.min_bars}"
             return result
 
         current_price = float(df[close_col].iloc[-1])
+        result.diag_close = result.diag_close or current_price
         is_breakout = False
         if current_price > resist_end:
             vol_today = float(df[vol_col].iloc[-1])
@@ -159,8 +200,12 @@ class PatternRecognizer:
             if vol_today > vol_5d * 1.5:
                 is_breakout = True
             else:
+                result.failure_stage = "BREAKOUT"
+                result.reason = f"量不足 {vol_today:.0f} < {float(vol_5d):.0f}×1.5"
                 return result
         elif current_price < support_end:
+            result.failure_stage = "BREAKOUT"
+            result.reason = f"跌破支撐 {current_price:.2f} < {support_end:.2f}"
             return result
 
         result.is_converging     = True

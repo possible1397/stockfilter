@@ -73,7 +73,7 @@ class TestStrategyScorer:
     def test_custom_weights(self):
         scorer = StrategyScorer(weights={
             'market': 1.0, 'density': 0.0, 'pattern': 0.0,
-            'breakout': 0.0, 'chain': 0.0,
+            'breakout': 0.0, 'chain': 0.0, 'chip': 0.0,
         })
         result = scorer.calculate_total_score(
             "TEST", m_score=75, s_score=0, p_score=0, b_score=0,

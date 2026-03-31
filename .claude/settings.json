@@ -5,7 +5,11 @@
       "Bash(python -m pytest tests/ -v --tb=short)",
       "Bash(venv/Scripts/python.exe scripts/run_backtest.py)",
       "Bash(venv/Scripts/python.exe -c \":*)",
-      "Bash(ls \"c:\\\\Users\\\\Terry\\\\PycharmProjects\\\\Stock\\\\output\\\\scanner_\"*.csv)"
+      "Bash(ls \"c:\\\\Users\\\\Terry\\\\PycharmProjects\\\\Stock\\\\output\\\\scanner_\"*.csv)",
+      "Bash(venv/Scripts/python.exe main.py)",
+      "Bash(grep -oE '^\\\\s*\"\"\"\"[^_][^\"\"\"\"]*\"\"\"\":\\\\s*\\\\{$' data/supply_chain_data.json)",
+      "Bash(venv/Scripts/python.exe scripts/update_supply_chain.py)",
+      "Bash(python -c \":*)"
     ]
   }
 }

@@ -12,6 +12,7 @@ class StrategyScore:
     breakout_score: float
     density_score: float    # 收斂密度分數 (族群內收斂集中度)
     chain_score: float      # 供應鏈動能分數 (上下游共振)
+    chip_score: float       # 籌碼動能分數 (投信/外資認養)
     opportunity_grade: str  # A/B/C 機會等級
     details: dict
 
@@ -24,26 +25,28 @@ class StrategyScorer:
     def __init__(self, weights=None):
         # 權重分配 (總和 100%)
         self.weights = weights or {
-            'market':   0.15,   # 大盤環境
+            'market':   0.10,   # 大盤環境
             'density':  0.25,   # 收斂密度 (核心：預測輪動)
-            'pattern':  0.30,   # 型態品質
+            'pattern':  0.15,   # 型態品質
             'breakout': 0.10,   # 突破即時性
-            'chain':    0.20,   # 供應鏈動能
+            'chain':    0.15,   # 供應鏈動能
+            'chip':     0.25,   # 籌碼動能 (含大戶領先指標)
         }
 
     def calculate_total_score(self, ticker, m_score, s_score, p_score, b_score,
-                              density_score=0, chain_score=0,
+                              density_score=0, chain_score=0, chip_score=0,
                               opportunity_grade='C', details=None):
         """
         計算總合分
         所有分數均為 0-100 之間
         """
         total = (
-            m_score     * self.weights['market'] +
+            m_score       * self.weights['market'] +
             density_score * self.weights['density'] +
-            p_score     * self.weights['pattern'] +
-            b_score     * self.weights['breakout'] +
-            chain_score * self.weights['chain']
+            p_score       * self.weights['pattern'] +
+            b_score       * self.weights['breakout'] +
+            chain_score   * self.weights['chain'] +
+            chip_score    * self.weights['chip']
         )
 
         # A 級機會加分 (最多 +5)
@@ -59,6 +62,7 @@ class StrategyScorer:
             breakout_score=b_score,
             density_score=density_score,
             chain_score=chain_score,
+            chip_score=chip_score,
             opportunity_grade=opportunity_grade,
             details=details or {}
         )
