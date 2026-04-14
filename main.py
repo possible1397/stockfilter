@@ -27,19 +27,18 @@ from core.scorer import StrategyScorer, StrategyScore
 from core.supply_chain import SupplyChainEngine
 from core.convergence_scanner import ConvergenceScanner
 from core.chip_analysis import ChipAnalyzer
+from core.position_manager import PositionManager
 from utils.visualizer import Visualizer
 import data.database as db_module
 
 # ==================== 載入設定 ====================
 _CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 
-
 def load_config(path: str = _CONFIG_FILE) -> dict:
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
-
 
 CFG = load_config()
 _scanner = CFG.get("scanner", {})
@@ -59,7 +58,7 @@ logger = get_logger(__name__)
 # ==================== 設定區 ====================
 DB_PATH      = _scanner.get("db_path", "stock_data.db")
 OUTPUT_DIR   = _scanner.get("output_dir", "output")
-RESULTS_CSV  = os.path.join(OUTPUT_DIR, f"scanner_{datetime.today().strftime('%Y%m%d')}.csv")
+# RESULTS_CSV 將在 run_scanner 中根據日期動態生成
 
 FORCE_SAFE_TRADE       = _scanner.get("force_safe_trade", True)
 MARKET_SCORE_THRESHOLD = _scanner.get("market_score_threshold", 40)
@@ -261,15 +260,88 @@ def _save_diag_csv(all_results, supply_eng, path):
     logger.info(f"  診斷 CSV 已輸出至: {path}")
 
 
-def run_scanner(tickers: list):
-    logger.info(f"=== 台股精準全自動評分篩選器 v2 (反轉邏輯) | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+def _run_position_monitor(fetcher, valid_data: dict, target_date, date_str: str):
+    """
+    持倉監控 (Step 8)：讀取 my_positions.json，計算動態操作建議。
+    即使當天無收斂標的，仍會執行此步驟，確保持倉股票不被遺漏。
+    """
+    pos_mgr = PositionManager(config=CFG)
+    if not pos_mgr.positions:
+        return
+
+    logger.info("=" * 60)
+    logger.info("[Step 8] 持倉監控 — 我的持股操作建議")
+    logger.info("=" * 60)
+
+    # 確保持倉股票有最新數據
+    pos_tickers = pos_mgr.get_tickers()
+    pos_data = {}
+    for t in pos_tickers:
+        if t in valid_data:
+            pos_data[t] = valid_data[t]
+        else:
+            # 持倉股票不在掃描清單中，強制下載
+            df = fetcher.fetch_stock_data(t, target_date=target_date)
+            if df is not None and not df.empty:
+                df = df.loc[:target_date.strftime('%Y-%m-%d')]
+                pos_data[t] = df
+
+    advices = pos_mgr.monitor(pos_data)
+
+    # 輸出至 CSV
+    pos_csv = os.path.join(OUTPUT_DIR, f"positions_{date_str}.csv")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(pos_csv, 'w', newline='', encoding='utf-8-sig') as f:
+        fieldnames = [
+            '股票代號', '買進均價', '現價', '損益%', '剩餘比例',
+            '硬停損', 'ATR追蹤停損', 'K線追蹤停損', '建議停損',
+            '持倉最高價', '操作建議',
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for adv in advices:
+            writer.writerow({
+                '股票代號':     adv.ticker,
+                '買進均價':     adv.entry_price,
+                '現價':         adv.current_price,
+                '損益%':        adv.profit_pct,
+                '剩餘比例':     f"{adv.remaining_ratio*100:.0f}%",
+                '硬停損':       adv.hard_stop,
+                'ATR追蹤停損':   adv.atr_trail_stop,
+                'K線追蹤停損':   adv.kline_trail_stop,
+                '建議停損':     adv.recommended_stop,
+                '持倉最高價':   adv.highest_since_entry,
+                '操作建議':     adv.action,
+            })
+
+    # Console 顯示
+    for adv in advices:
+        logger.info(f"  ┌─ {adv.ticker}  現價: {adv.current_price}  損益: {adv.profit_pct:+.1f}%")
+        logger.info(f"  │  買進: {adv.entry_price}  最高: {adv.highest_since_entry}  剩餘: {adv.remaining_ratio*100:.0f}%")
+        logger.info(f"  │  停損位 → 硬停: {adv.hard_stop} | ATR: {adv.atr_trail_stop} | K線: {adv.kline_trail_stop}")
+        logger.info(f"  │  ★ 建議停損: {adv.recommended_stop}")
+        logger.info(f"  └─ {adv.action}")
+        logger.info("")
+
+    logger.info(f"  持倉報表已輸出至: {pos_csv}")
+
+def run_scanner(tickers: list, target_date: Optional[datetime] = None):
+    if target_date is None:
+        target_date = datetime.now()
+    
+    date_str = target_date.strftime('%Y-%m-%d')
+    file_suffix = target_date.strftime('%Y%m%d')
+    results_csv = os.path.join(OUTPUT_DIR, f"scanner_{file_suffix}.csv")
+    diag_csv = os.path.join(OUTPUT_DIR, f"diag_{file_suffix}.csv")
+
+    logger.info(f"=== 台股精選評分篩選器 v2 | 掃描基準日: {date_str} ===")
 
     # ============================================================
     # Step 0: 大盤環境偵測 (Market Regime)
     # ============================================================
     regime = MarketRegimeDetector()
-    logger.info("[Step 0] 執行大盤環境偵測器 (連續評分)...")
-    m_score = regime.get_market_score()
+    logger.info(f"[Step 0] 執行大盤環境偵測器 (日期: {date_str})...")
+    m_score = regime.get_market_score(end_date=date_str)
     logger.info(f" [+] 市場環境分數: {m_score:.1f}/100")
 
     market_status = regime.get_market_status()
@@ -280,9 +352,13 @@ def run_scanner(tickers: list):
 
     if FORCE_SAFE_TRADE and m_score < MARKET_SCORE_THRESHOLD:
         logger.warning(
-            f" [!] 市場環境目前不適合做多 (分數 {m_score:.1f} < {MARKET_SCORE_THRESHOLD})，程式終止以降低風險。"
+            f" [!] 市場環境不適合做多 (分數 {m_score:.1f} < {MARKET_SCORE_THRESHOLD})"
         )
-        return []
+        if '--force' not in sys.argv:
+            logger.warning(" 程式終止。若要強行執行掃描，請加上 --force 參數。")
+            return []
+        else:
+            logger.info(" [!] 已開啟 --force 模式，繼續執行...")
 
     # ============================================================
     # Step 1: 初始化各模組
@@ -313,17 +389,25 @@ def run_scanner(tickers: list):
     # ============================================================
     # Step 1: 批次下載 K 線與籌碼資料
     # ============================================================
-    logger.info("[Step 1.1] 批次更新全市場籌碼資料 (抓取近 15 天)...")
+    logger.info("[Step 1.1] 批次更新全市場籌碼資料...")
     fetcher.update_market_chip_data(days=15)
     
-    logger.info(f"[Step 1.2] 批次下載 K 線資料 (標的數: {len(tickers)})...")
-    stock_data = fetcher.fetch_batch_data(tickers, max_workers=DOWNLOAD_WORKERS)
+    logger.info(f"[Step 1.2] 批次下載 K 線資料 (目標日: {date_str})...")
+    stock_data = fetcher.fetch_batch_data(tickers, max_workers=DOWNLOAD_WORKERS, target_date=target_date)
 
     # ============================================================
     # Step 2: 資料清洗
     # ============================================================
-    logger.info("[Step 2] 資料清洗 (過濾低流動性與樣本不足標的)...")
-    valid_data = cleaner.filter_batch(stock_data)
+    logger.info("[Step 2] 資料清洗與裁切 (Look-back filter)...")
+    # 執行資料裁切，避免演算法看到未來
+    sliced_data = {}
+    for t, df in stock_data.items():
+        if df is not None and not df.empty:
+            df_sliced = df.loc[:target_date.strftime('%Y-%m-%d')]
+            if not df_sliced.empty:
+                sliced_data[t] = df_sliced
+
+    valid_data = cleaner.filter_batch(sliced_data)
     valid_tickers = list(valid_data.keys())
 
     # ============================================================
@@ -345,16 +429,19 @@ def run_scanner(tickers: list):
         logger.info("  本次掃描未找到任何收斂標的。")
         # 仍輸出空的 scanner CSV（只有表頭）
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        with open(RESULTS_CSV, 'w', newline='', encoding='utf-8-sig') as f:
+        with open(results_csv, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=[
                 '族群等級', '股票代號', '產業別', '狀態',
                 '進場總分', '收盤價', '停損價', 'ATR',
                 '主要產品', '籌碼分', '法人連續買超天數', '目標價', '操作建議',
             ])
             writer.writeheader()
-        logger.info(f"  報表已輸出至: {RESULTS_CSV} (0 筆)")
-        DIAG_CSV = os.path.join(OUTPUT_DIR, f"diag_{datetime.today().strftime('%Y%m%d')}.csv")
-        _save_diag_csv(all_scan_results, supply_eng, DIAG_CSV)
+        logger.info(f"  報表已輸出至: {results_csv} (0 筆)")
+        _save_diag_csv(all_scan_results, supply_eng, diag_csv)
+
+        # 即使無新收斂標的，仍需監控持倉
+        _run_position_monitor(fetcher, {}, target_date, date_str)
+
         fetcher.close()
         return []
 
@@ -395,6 +482,10 @@ def run_scanner(tickers: list):
         c_score = supply_eng.get_chain_score(result.ticker, valid_data)
         
         chip_df = db_module.load_chip_data(result.ticker, DB_PATH)
+        # 籌碼資料同樣需要裁切
+        if chip_df is not None and not chip_df.empty:
+            chip_df = chip_df.loc[:target_date.strftime('%Y-%m-%d')]
+
         chip_res = chip_eng.analyze(result.ticker, valid_data[result.ticker], chip_df)
         chip_score_val = chip_res['score'] if chip_res else 0.0
         chip_details = chip_res.get('details', {}) if chip_res else {}
@@ -435,10 +526,8 @@ def run_scanner(tickers: list):
     # ============================================================
     logger.info("[Step 7] 輸出精選評分報表...")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    scan_date = datetime.today().strftime('%Y-%m-%d')
-
     # 7a. CSV 輸出 (0筆時仍輸出表頭，方便確認格式)
-    with open(RESULTS_CSV, 'w', newline='', encoding='utf-8-sig') as f:
+    with open(results_csv, 'w', newline='', encoding='utf-8-sig') as f:
         fieldnames = [
             '族群等級', '股票代號', '產業別', '狀態',
             '進場總分', '收盤價', '停損價', 'ATR',
@@ -475,18 +564,17 @@ def run_scanner(tickers: list):
                 '目標價':         target_p,
                 '操作建議':       action,
             })
-    logger.info(f"  報表已輸出至: {RESULTS_CSV}")
+    logger.info(f"  報表已輸出至: {results_csv}")
 
     if score_results:
         # 7b. SQLite 持久化
-        db_module.save_scan_results(DB_PATH, scan_date, score_results, supply_eng, opp_map)
+        db_module.save_scan_results(DB_PATH, date_str, score_results, supply_eng, opp_map)
         logger.info(f"  掃描結果已寫入 SQLite: {DB_PATH} (表: scan_results)")
     else:
         logger.info("  本次掃描未找到符合條件的標的。")
 
     # 診斷 CSV（不論有無通過標的都輸出）
-    DIAG_CSV = os.path.join(OUTPUT_DIR, f"diag_{datetime.today().strftime('%Y%m%d')}.csv")
-    _save_diag_csv(all_scan_results, supply_eng, DIAG_CSV)
+    _save_diag_csv(all_scan_results, supply_eng, diag_csv)
 
     a_count = sum(1 for r in score_results if r.opportunity_grade == 'A')
     b_count = sum(1 for r in score_results if r.opportunity_grade == 'B')
@@ -495,6 +583,10 @@ def run_scanner(tickers: list):
         f"=== 掃描完成！{len(tickers)} 檔 -> {len(valid_data)} 檔合格 "
         f"-> {len(converging_results)} 檔收斂 (A:{a_count} B:{b_count} C:{c_count}) ==="
     )
+
+    # Step 8: 持倉監控
+    _run_position_monitor(fetcher, valid_data, target_date, date_str)
+
     fetcher.close()
     return score_results
 
@@ -535,13 +627,70 @@ def check_and_update_chips(force: bool = False):
 
 
 if __name__ == "__main__":
-    sample_mode = '--sample' in sys.argv
-    force_update = '--update-chip' in sys.argv
+    import argparse
+    parser = argparse.ArgumentParser(description='台股三角收斂自動篩選器')
+    parser.add_argument('--sample', action='store_true', help='使用樣本模式測試')
+    parser.add_argument('--update-chip', action='store_true', help='強制更新籌碼資料')
+    parser.add_argument('--date', type=str, help='指定掃描日期 (YYYY-MM-DD)')
+    parser.add_argument('--force', action='store_true', help='忽略大盤門檻強行執行')
+    # 持倉管理指令
+    parser.add_argument('--add-position', nargs=4, metavar=('TICKER', 'DATE', 'PRICE', 'SHARES'),
+                        help='新增持倉: --add-position 1717.TW 2026-04-08 67.1 2')
+    parser.add_argument('--remove-position', type=str, metavar='TICKER',
+                        help='移除持倉: --remove-position 1717.TW')
+    parser.add_argument('--list-positions', action='store_true', help='列出所有持倉')
+    parser.add_argument('--partial-exit', nargs=2, metavar=('TICKER', 'PRICE'),
+                        help='記錄減碼: --partial-exit 1717.TW 80.7')
+    args = parser.parse_args()
 
+    # === 持倉管理 (不執行掃描) ===
+    if args.add_position:
+        pm = PositionManager(config=CFG)
+        t, d, p, s = args.add_position
+        pm.add_position(t, d, float(p), int(s))
+        logger.info(f"✅ 已新增持倉: {t} {s}張 @ {p}  買進日: {d}")
+        sys.exit(0)
+
+    if args.remove_position:
+        pm = PositionManager(config=CFG)
+        pm.remove_position(args.remove_position)
+        logger.info(f"✅ 已移除持倉: {args.remove_position}")
+        sys.exit(0)
+
+    if args.list_positions:
+        pm = PositionManager(config=CFG)
+        if not pm.positions:
+            logger.info("目前無任何持倉。使用 --add-position 新增。")
+        else:
+            logger.info(f"{'='*50}")
+            logger.info(f"  目前持倉 ({len(pm.positions)} 檔)")
+            logger.info(f"{'='*50}")
+            for p in pm.positions:
+                status = f"已減碼至{p.remaining_ratio*100:.0f}%" if p.remaining_ratio < 1.0 else "全倉"
+                logger.info(f"  {p.ticker}  {p.shares}張 @ {p.entry_price}  {p.entry_date}  [{status}]  {p.note}")
+        sys.exit(0)
+
+    if args.partial_exit:
+        pm = PositionManager(config=CFG)
+        t, p = args.partial_exit
+        pm.record_partial_exit(t, float(p))
+        logger.info(f"✅ 已記錄 {t} 減碼 @ {p}")
+        sys.exit(0)
+
+    # === 正常掃描流程 ===
     # 執行 Step 0: 自動籌碼補齊
-    check_and_update_chips(force=force_update)
+    check_and_update_chips(force=args.update_chip)
 
-    if sample_mode:
+    if args.date:
+        try:
+            target_dt = datetime.strptime(args.date, '%Y-%m-%d')
+        except ValueError:
+            logger.error("日期格式錯誤，請使用 YYYY-MM-DD")
+            sys.exit(1)
+    else:
+        target_dt = datetime.now()
+
+    if args.sample:
         logger.info("[模式] 樣本測試模式 (5 檔)")
         tickers = SAMPLE_TICKERS
     else:
@@ -551,4 +700,4 @@ if __name__ == "__main__":
             logger.warning("清單取得失敗，切換為樣本模式")
             tickers = SAMPLE_TICKERS
 
-    results = run_scanner(tickers)
+    results = run_scanner(tickers, target_date=target_dt)

@@ -97,9 +97,12 @@ def save_dataframe(ticker: str, df: pd.DataFrame, db_path: str = DB_PATH):
         return
 
     df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        # 取第一層索引 (例如 'Close')，忽略第二層 (例如 '2330.TW')
+        df.columns = df.columns.get_level_values(0)
     df.reset_index(inplace=True)
 
-    rename_map = {col: col.lower().strip() for col in df.columns}
+    rename_map = {str(col): str(col).lower().strip() for col in df.columns}
     df.rename(columns=rename_map, inplace=True)
 
     if 'datetime' in df.columns:

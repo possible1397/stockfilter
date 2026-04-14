@@ -33,6 +33,11 @@ backtest:
   commission: 0.001425            # 手續費
   tax: 0.003                      # 交易稅
   slippage: 0.001                 # 滑價
+  # --- 進階出場策略 ---
+  partial_profit_threshold: 0.15  # 階梯減碼：獲利達此比例時賣出一半 (0 = 停用)
+  partial_profit_ratio: 0.5       # 減碼比例 (0.5 = 賣出 50%)
+  dynamic_atr_update: true        # 動態 ATR：每日重新計算 ATR 而非固定進場日數值
+  k_line_trail: true              # K 線追蹤：強勢股改用前日低點或收盤作為追蹤停損
 
 logging:
   level: INFO                     # DEBUG / INFO / WARNING / ERROR

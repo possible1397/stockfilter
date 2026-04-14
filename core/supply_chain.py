@@ -98,8 +98,13 @@ class SupplyChainEngine:
         """查詢個股的所有供應鏈位置 (一股多鏈情況)"""
         return self._get_positions(ticker)
 
+    @staticmethod
+    def _has_chinese(text: str) -> bool:
+        """檢查字串是否包含中文字元"""
+        return any('\u4e00' <= ch <= '\u9fff' for ch in text)
+
     def get_product_description(self, ticker: str) -> str:
-        """取得個股主要產品描述，優先使用鉅亨網爬取的資料"""
+        """取得個股主要產品描述，優先使用鉅亨網爬取的資料（僅中文）"""
         # 1. 優先用鉅亨網批次爬取的產品描述
         product_file = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -109,9 +114,14 @@ class SupplyChainEngine:
             try:
                 with open(product_file, encoding='utf-8') as f:
                     products = json.load(f)
-                desc = products.get(ticker, '')
-                if desc:
-                    return desc
+
+                # 嘗試多種 key 格式: 原始 ticker → 純數字.TW → 純數字.TWO → 純數字
+                symbol = ticker.split('.')[0]
+                candidates = [ticker, f"{symbol}.TW", f"{symbol}.TWO", symbol]
+                for key in candidates:
+                    desc = products.get(key, '')
+                    if desc and self._has_chinese(desc):
+                        return desc
             except Exception:
                 pass
 
@@ -120,7 +130,10 @@ class SupplyChainEngine:
         if not positions:
             return ""
         chain_name, level_name = positions[0]
-        return self.chain_data.get(chain_name, {}).get(level_name, {}).get('description', '')
+        desc = self.chain_data.get(chain_name, {}).get(level_name, {}).get('description', '')
+        if '頁面自動彙整' in desc or not self._has_chinese(desc):
+            return ""
+        return desc
 
     def get_related_tickers(self, ticker: str) -> dict:
         """取得同供應鏈上下游的所有 ticker"""

@@ -1,0 +1,12 @@
+[
+  {
+    "ticker": "1717.TW",
+    "entry_date": "2026-04-08",
+    "entry_price": 67.1,
+    "shares": 2,
+    "remaining_ratio": 0.5,
+    "partial_exit_date": "2026-04-13",
+    "partial_exit_price": 80.7,
+    "note": "長興化工，4/13已減碼1張"
+  }
+]

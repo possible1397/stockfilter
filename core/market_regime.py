@@ -25,22 +25,38 @@ class MarketRegimeDetector:
         self._cache: Optional[dict] = None
         self._cache_hour: Optional[int] = None
 
-    def get_market_status(self) -> dict:
+    def get_market_status(self, end_date: Optional[str] = None) -> dict:
         """
         取得大盤與櫃買的目前趨勢狀態 (連續分數版)
-        同一小時內多次呼叫會使用快取，避免重複下載指數資料。
+        end_date: 指定掃描日期 (YYYY-MM-DD)，若為 None 則使用目前最新資料。
         """
+        # TTL 快取：同一小時內不重複下載 (僅限非指定日期模式)
         current_hour = datetime.now().hour
-        if self._cache is not None and self._cache_hour == current_hour:
+        if end_date is None and self._cache is not None and self._cache_hour == current_hour:
             return self._cache
 
         results = {}
         for name, ticker in self.indices.items():
             try:
-                df = yf.download(ticker, period="6mo", progress=False)
+                # 優先從資料庫抓取指數 (如果有)，否則從 yf 下載
+                import data.database as db_module
+                df = db_module.load_dataframe(ticker)
+                
+                if df.empty or (end_date and df.index.max() < pd.to_datetime(end_date)):
+                    df = yf.download(ticker, period="1y", progress=False)
+                    if not df.empty:
+                        db_module.save_dataframe(ticker, df)
+
                 if df.empty:
                     results[name] = {"status": "Unknown", "score": 0}
                     continue
+
+                # 如果有指定日期，執行裁切
+                if end_date:
+                    df = df.loc[:end_date]
+                    if df.empty:
+                        results[name] = {"status": "NoData", "score": 0}
+                        continue
 
                 closes = df['Close'].values.flatten()
                 close = float(closes[-1])
@@ -95,9 +111,9 @@ class MarketRegimeDetector:
         self._cache_hour = current_hour
         return results
 
-    def get_market_score(self) -> float:
+    def get_market_score(self, end_date: Optional[str] = None) -> float:
         """取得大盤環境的量化分數 (0-100)，加權: TSE 60% + OTC 40%"""
-        res = self.get_market_status()
+        res = self.get_market_status(end_date=end_date)
         tse_score = res.get('TSE', {}).get('score', 0)
         otc_score = res.get('OTC', {}).get('score', 0)
         return round(tse_score * 0.6 + otc_score * 0.4, 1)

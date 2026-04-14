@@ -27,16 +27,16 @@ class StockFetcher:
         """判斷是否為交易日 (排除週末，國定假日不在此處理)"""
         return dt.weekday() < 5
 
-    def fetch_stock_data(self, ticker: str) -> pd.DataFrame:
+    def fetch_stock_data(self, ticker: str, target_date: Optional[datetime] = None) -> pd.DataFrame:
         """
         抓取單檔股票的日 K 資料 (含 SQLite 快取 + 增量下載)
-        - 若資料庫已有今日最新資料 → 直接從快取讀取
-        - 若為非交易日且有近期快取 → 直接使用快取
-        - 若快取有部分資料 → 只下載缺少的增量部分
-        - 若無任何快取 → 下載完整 1 年
+        target_date: 指定掃描日期，若為 None 則為今日。
         """
-        today = datetime.today()
-        today_date = today.date()
+        if target_date is None:
+            today_date = datetime.today().date()
+        else:
+            today_date = target_date.date()
+
         latest_str = db_module.get_latest_date(ticker, self.db_path)
 
         if latest_str:
@@ -51,7 +51,7 @@ class StockFetcher:
                     return db_module.load_dataframe(ticker, self.db_path)
 
                 # 非交易日且快取在 3 天內 → 直接使用
-                if not self._is_trading_day(today):
+                if not self._is_trading_day(datetime.combine(today_date, datetime.min.time())):
                     if (today_date - latest_date).days <= 3:
                         return db_module.load_dataframe(ticker, self.db_path)
 
@@ -86,7 +86,7 @@ class StockFetcher:
             cached = db_module.load_dataframe(ticker, self.db_path)
             return cached if not cached.empty else pd.DataFrame()
 
-    def fetch_batch_data(self, tickers: list, max_workers: int = 5) -> dict:
+    def fetch_batch_data(self, tickers: list, max_workers: int = 5, target_date: Optional[datetime] = None) -> dict:
         """
         以 ThreadPoolExecutor 多執行緒批次下載所有股票
         回傳: {ticker: DataFrame, ...}
@@ -96,7 +96,7 @@ class StockFetcher:
         done  = 0
         logger.info(f"[Fetcher] 使用 {max_workers} 執行緒下載 {total} 檔資料...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {executor.submit(self.fetch_stock_data, t): t for t in tickers}
+            future_map = {executor.submit(self.fetch_stock_data, t, target_date): t for t in tickers}
             for future in concurrent.futures.as_completed(future_map):
                 ticker = future_map[future]
                 done += 1

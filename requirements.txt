@@ -11,3 +11,6 @@ PyYAML==6.0.3
 requests==2.32.5
 scipy==1.17.1
 yfinance==1.2.0
+
+streamlit>=1.32.0
+plotly>=5.20.0

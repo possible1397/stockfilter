@@ -84,6 +84,12 @@ class BacktestConfig:
     # 族群濾網
     min_grade: str = ""              # "" = 不限, "B" = 只進 A/B, "A" = 只進 A
 
+    # 進階出場策略
+    partial_profit_threshold: float = 15.0   # 獲利 % 達此門檻觸發減碼 (0 = 停用)
+    partial_profit_ratio: float = 0.5        # 減碼比例
+    dynamic_atr_update: bool = True          # 每日重算 ATR
+    k_line_trail: bool = True                # 強勢股用前日 K 線追蹤
+
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "BacktestConfig":
         """從 config.yaml 的 backtest: 區段讀取參數"""
@@ -107,6 +113,11 @@ class BacktestConfig:
                 long_only=bool(pat.get("long_only", True)),
                 trend_filter=bool(pat.get("trend_filter", True)),
                 volume_dryup=bool(pat.get("volume_dryup", True)),
+                # 進階出場策略
+                partial_profit_threshold=float(bt.get("partial_profit_threshold", 0.15)) * 100,
+                partial_profit_ratio=float(bt.get("partial_profit_ratio", 0.5)),
+                dynamic_atr_update=bool(bt.get("dynamic_atr_update", True)),
+                k_line_trail=bool(bt.get("k_line_trail", True)),
             )
         except FileNotFoundError:
             print(f"[BacktestConfig] 找不到 {yaml_path}，使用預設值")
@@ -126,10 +137,12 @@ class Trade:
     exit_price: float
     return_pct: float       # 扣除交易成本的淨報酬率
     hold_days: int
-    exit_reason: str        # 'max_hold', 'stop_loss', 'take_profit', 'atr_stop'
+    exit_reason: str        # 'max_hold', 'stop_loss', 'take_profit', 'atr_stop', 'partial_profit', 'kline_stop'
     entry_score: float = 0
     sector: str = ""
     grade: str = ""
+    is_partial: bool = False        # 是否為分批平倉的部分交易
+    position_ratio: float = 1.0     # 此筆交易佔原始倉位的比例
 
 
 class BacktestEngine:
@@ -225,17 +238,19 @@ class BacktestEngine:
         return entry_price * 0.03  # 預設 3%
 
     def _check_exit(self, ticker: str, pos: dict, current_bar: pd.Series,
-                    day_count: int, ma20: float = None) -> Optional[tuple]:
+                    day_count: int, ma20: float = None,
+                    df_up_to: pd.DataFrame = None) -> Optional[tuple]:
         """
         檢查是否觸發出場條件
         回傳: (exit_price, exit_reason) 或 None
 
         出場優先序:
           1. 固定停損 (硬停)
-          2. 固定停利
-          3. MA20 追蹤停損 (use_ma20_trail=True，浮盈>=5% 後跌破月線出場)
-             或 ATR 移動停損 (浮盈 >= atr_activate_pct 後才啟動)
-          4. 最大持有天數
+          2. 階梯式減碼 (獲利達門檻，平倉部分)
+          3. 固定停利
+          4. K 線追蹤停損 (強勢股用前日低點追蹤)
+          5. MA20 / ATR 移動停損
+          6. 最大持有天數
         """
         close = float(current_bar['Close'])
         high = float(current_bar['High'])
@@ -244,16 +259,40 @@ class BacktestEngine:
 
         current_return = (close - entry_price) / entry_price * 100
 
+        # 0. 動態 ATR 更新 (每日重算，而非只用進場日數值)
+        if self.config.dynamic_atr_update and df_up_to is not None and 'atr' in pos:
+            new_atr = self._calculate_atr(df_up_to, entry_price)
+            if new_atr > 0:
+                pos['atr'] = new_atr
+
         # 1. 固定停損
         if self.config.stop_loss_pct > -99 and current_return <= self.config.stop_loss_pct:
             return (close, 'stop_loss')
 
-        # 2. 固定停利
+        # 2. 階梯式減碼
+        if (self.config.partial_profit_threshold > 0
+                and current_return >= self.config.partial_profit_threshold
+                and not pos.get('partial_done', False)):
+            pos['partial_done'] = True
+            return (close, 'partial_profit')
+
+        # 3. 固定停利
         if self.config.take_profit_pct > 0 and current_return >= self.config.take_profit_pct:
             return (close, 'take_profit')
 
-        # 3. 追蹤停損 — 浮盈超過啟動門檻後才啟動
+        # 4 & 5. 追蹤停損 — 浮盈超過啟動門檻後才啟動
         if current_return >= self.config.atr_activate_pct:
+            # 4a. K 線追蹤停損 (優先檢查)
+            if self.config.k_line_trail and df_up_to is not None and len(df_up_to) >= 2:
+                prev_bar = df_up_to.iloc[-2]
+                prev_low = float(prev_bar['Low'])
+                prev_close_val = float(prev_bar['Close'])
+                kline_stop = min(prev_low, prev_close_val)
+                # 只在 K 線止損比 ATR 止損更緊湊時使用
+                current_atr_stop = pos.get('trailing_stop', 0)
+                if kline_stop > current_atr_stop:
+                    pos['trailing_stop'] = kline_stop
+
             if self.config.use_ma20_trail and ma20 is not None:
                 # MA20 追蹤停損：收盤跌破月線出場
                 if close < ma20:
@@ -267,13 +306,14 @@ class BacktestEngine:
                 trailing_stop = highest - pos['atr'] * self.config.atr_stop_mult
                 pos['trailing_stop'] = max(pos.get('trailing_stop', 0), trailing_stop)
                 if low <= pos['trailing_stop']:
-                    return (pos['trailing_stop'], 'atr_stop')
+                    exit_reason = 'kline_stop' if self.config.k_line_trail else 'atr_stop'
+                    return (pos['trailing_stop'], exit_reason)
         else:
             # 未達啟動門檻仍追蹤最高價，等待啟動
             if high > pos.get('highest', entry_price):
                 pos['highest'] = high
 
-        # 4. 最大持有天數
+        # 6. 最大持有天數
         if self.config.max_hold_days > 0 and day_count >= self.config.max_hold_days:
             return (close, 'max_hold')
 
@@ -297,8 +337,9 @@ class BacktestEngine:
         }
 
     def _close_position(self, ticker: str, pos: dict,
-                        exit_price: float, exit_date: str, exit_reason: str):
-        """平倉並記錄交易"""
+                        exit_price: float, exit_date: str, exit_reason: str,
+                        is_partial: bool = False, position_ratio: float = 1.0):
+        """平倉並記錄交易 (支援分批平倉)"""
         gross_return = (exit_price - pos['entry_price']) / pos['entry_price']
         buy_cost = self._calculate_transaction_cost(is_buy=True)
         sell_cost = self._calculate_transaction_cost(is_buy=False)
@@ -316,6 +357,8 @@ class BacktestEngine:
             entry_score=pos.get('score', 0),
             sector=pos.get('sector', ''),
             grade=pos.get('grade', ''),
+            is_partial=is_partial,
+            position_ratio=position_ratio,
         ))
 
     def run(self, stock_data: dict, scan_results_by_date: dict = None) -> list[Trade]:
@@ -407,11 +450,22 @@ class BacktestEngine:
                     ma20_val = float(closes.rolling(20).mean().iloc[-1])
                     ma20 = ma20_val if not np.isnan(ma20_val) else None
 
-                exit_result = self._check_exit(ticker, pos, current_bar, pos['hold_days'], ma20=ma20)
+                exit_result = self._check_exit(ticker, pos, current_bar, pos['hold_days'],
+                                               ma20=ma20, df_up_to=df_up_to)
                 if exit_result:
                     exit_price, exit_reason = exit_result
-                    self._close_position(ticker, pos, exit_price, date_str, exit_reason)
-                    closed_tickers.append(ticker)
+                    if exit_reason == 'partial_profit':
+                        # 分批減碼：只平倉部分，剩餘部位繼續追蹤
+                        ratio = self.config.partial_profit_ratio
+                        self._close_position(ticker, pos, exit_price, date_str, exit_reason,
+                                             is_partial=True, position_ratio=ratio)
+                        # 不從 active_positions 移除，繼續追蹤剩餘部位
+                    else:
+                        # 完整出場
+                        remaining = 1.0 - (self.config.partial_profit_ratio if pos.get('partial_done') else 0)
+                        self._close_position(ticker, pos, exit_price, date_str, exit_reason,
+                                             position_ratio=remaining)
+                        closed_tickers.append(ticker)
 
             for t in closed_tickers:
                 del self.active_positions[t]
