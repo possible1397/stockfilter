@@ -1,5 +1,6 @@
-"""Data loading utilities — reads latest CSV and SQLite outputs."""
+"""Data loading utilities — reads latest CSV, SQLite, and position outputs."""
 import glob
+import json
 import os
 import sqlite3
 import pandas as pd
@@ -8,6 +9,8 @@ from datetime import date
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "stock_data.db")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "output")
+POSITIONS_JSON = os.path.join(os.path.dirname(__file__), "..", "..", "my_positions.json")
+CONFIG_YAML = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
 
 
 def _latest_file(pattern: str) -> str | None:
@@ -29,26 +32,81 @@ _EN_TO_ZH = {
 }
 
 
-def load_scanner() -> pd.DataFrame:
-    """Return the most recent scanner_YYYYMMDD.csv, normalising column names."""
-    path = _latest_file("scanner_*.csv")
+def load_scanner(scan_date: str | None = None) -> pd.DataFrame:
+    """Return scanner CSV for a specific date, or the latest."""
+    if scan_date:
+        path = os.path.join(OUTPUT_DIR, f"scanner_{scan_date.replace('-', '')}.csv")
+        if not os.path.exists(path):
+            path = _latest_file("scanner_*.csv")
+    else:
+        path = _latest_file("scanner_*.csv")
     if path is None:
         return pd.DataFrame()
     df = pd.read_csv(path, encoding="utf-8-sig")
     df.columns = df.columns.str.strip()
-    # Remap English column names used in older files
     df.rename(columns=_EN_TO_ZH, inplace=True)
     return df
 
 
-def load_diag() -> pd.DataFrame:
-    """Return the most recent diag_YYYYMMDD.csv."""
-    path = _latest_file("diag_*.csv")
+def load_diag(scan_date: str | None = None) -> pd.DataFrame:
+    """Return diag CSV for a specific date, or the latest."""
+    if scan_date:
+        path = os.path.join(OUTPUT_DIR, f"diag_{scan_date.replace('-', '')}.csv")
+        if not os.path.exists(path):
+            path = _latest_file("diag_*.csv")
+    else:
+        path = _latest_file("diag_*.csv")
     if path is None:
         return pd.DataFrame()
     df = pd.read_csv(path, encoding="utf-8-sig")
     df.columns = df.columns.str.strip()
     return df
+
+
+def load_positions_report(scan_date: str | None = None) -> pd.DataFrame:
+    """Return the positions monitoring CSV."""
+    if scan_date:
+        path = os.path.join(OUTPUT_DIR, f"positions_{scan_date}.csv")
+        if not os.path.exists(path):
+            path = _latest_file("positions_*.csv")
+    else:
+        path = _latest_file("positions_*.csv")
+    if path is None:
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    df.columns = df.columns.str.strip()
+    return df
+
+
+def load_positions_config() -> list[dict]:
+    """Read my_positions.json for raw position data."""
+    path = os.path.abspath(POSITIONS_JSON)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        # Support both list format and dict-with-positions format
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("positions", [])
+        return []
+    except Exception:
+        return []
+
+
+def load_app_config() -> dict:
+    """Load config.yaml for display in sidebar."""
+    path = os.path.abspath(CONFIG_YAML)
+    if not os.path.exists(path):
+        return {}
+    try:
+        import yaml
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
 
 
 def load_scan_results(days: int = 30) -> pd.DataFrame:
@@ -71,7 +129,11 @@ def latest_scan_date() -> str:
     path = _latest_file("scanner_*.csv")
     if path is None:
         return str(date.today())
-    return os.path.basename(path).replace("scanner_", "").replace(".csv", "")
+    raw = os.path.basename(path).replace("scanner_", "").replace(".csv", "")
+    # Convert YYYYMMDD to YYYY-MM-DD
+    if len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    return raw
 
 
 def latest_market_score() -> float | None:
@@ -90,3 +152,16 @@ def list_chart_pngs() -> dict[str, str]:
         name = os.path.basename(p)
         result[name] = p
     return result
+
+
+def list_available_dates() -> list[str]:
+    """Return all available scan dates from output directory."""
+    files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "scanner_*.csv")))
+    dates = []
+    for f in files:
+        raw = os.path.basename(f).replace("scanner_", "").replace(".csv", "")
+        if len(raw) == 8 and raw.isdigit():
+            dates.append(f"{raw[:4]}-{raw[4:6]}-{raw[6:]}")
+        else:
+            dates.append(raw)
+    return dates

@@ -21,7 +21,7 @@ def render(scanner_df: pd.DataFrame) -> None:
                 return ""
 
         if "籌碼分" in top10.columns:
-            styled = top10.style.applymap(_bar, subset=["籌碼分"])
+            styled = top10.style.map(_bar, subset=["籌碼分"])
             st.dataframe(styled, width="stretch", hide_index=True)
         else:
             st.dataframe(top10, width="stretch", hide_index=True)
