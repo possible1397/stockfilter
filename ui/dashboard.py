@@ -187,6 +187,24 @@ hr {
 h1, h2, h3 {
     color: #e6edf3 !important;
 }
+
+/* ── Fix inner tab panel highlight (remove extra slider) ── */
+.stTabs [data-baseweb="tab-panel"] {
+    padding-top: 12px;
+}
+
+/* ── Force dark theme on dataframe cells ── */
+.stDataFrame table {
+    color: #e6edf3 !important;
+}
+.stDataFrame th {
+    background-color: #161b22 !important;
+    color: #c9d1d9 !important;
+}
+.stDataFrame td {
+    background-color: rgba(22, 27, 34, 0.8) !important;
+    color: #e6edf3 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
