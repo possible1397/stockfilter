@@ -10,8 +10,8 @@ import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from dataclasses import dataclass, field
-from typing import Optional, List
+from dataclasses import dataclass
+from typing import List
 
 from utils.logger import get_logger
 
@@ -176,8 +176,11 @@ class PositionManager:
             
             # 建立啟動旗標 (一旦某日大於等於門檻，往後皆為 True)
             df_calc['IsActive'] = df_calc['ProfitPct'] >= self.atr_activate_pct
-            df_calc.loc[mask_held, 'ActiveFlag'] = df_calc.loc[mask_held, 'IsActive'].cummax()
-            df_calc['ActiveFlag'] = df_calc['ActiveFlag'].fillna(False)
+            df_calc['ActiveFlag'] = False
+            if mask_held.any():
+                df_calc.loc[mask_held, 'ActiveFlag'] = (
+                    df_calc.loc[mask_held, 'IsActive'].cummax().astype(bool)
+                )
 
             # K線停損邏輯: min(前一日最低, 前一日收盤)
             df_calc['PrevLow'] = df_calc['Low'].shift(1)
