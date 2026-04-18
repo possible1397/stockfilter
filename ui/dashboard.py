@@ -53,6 +53,15 @@ section[data-testid="stSidebar"] .stMarkdown h2,
 section[data-testid="stSidebar"] .stMarkdown h3 {
     color: #c9d1d9 !important;
 }
+section[data-testid="stSidebar"] .stMarkdown p,
+section[data-testid="stSidebar"] .stMarkdown li,
+section[data-testid="stSidebar"] .stMarkdown table {
+    color: #e6edf3 !important;
+}
+section[data-testid="stSidebar"] .stMarkdown code {
+    background-color: rgba(99, 110, 255, 0.15) !important;
+    color: #a5d6ff !important;
+}
 
 /* ── Main title ── */
 .dashboard-title {
@@ -85,6 +94,8 @@ section[data-testid="stSidebar"] .stMarkdown h3 {
     font-weight: 500;
     color: #8b949e;
     transition: all 0.2s ease;
+    flex: 1;
+    text-align: center;
 }
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;

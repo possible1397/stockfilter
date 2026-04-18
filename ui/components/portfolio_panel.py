@@ -145,9 +145,17 @@ def _render_position_card(row: pd.Series) -> None:
 
 
 def _render_stop_gauge(ticker, current, hard, atr, kline, entry, highest):
-    """Render a horizontal price-level chart showing all stop levels."""
+    """Render a vertical price-level chart showing all stop levels optionally with K-lines."""
     if highest <= 0 or entry <= 0:
         return
+
+    # Try to load K-line data for context
+    try:
+        from data.database import load_dataframe
+        df = load_dataframe(ticker)
+        has_kline = not df.empty
+    except Exception:
+        has_kline = False
 
     all_prices = [p for p in [hard, atr, kline, entry, current, highest] if p > 0]
     if not all_prices:
@@ -157,54 +165,90 @@ def _render_stop_gauge(ticker, current, hard, atr, kline, entry, highest):
 
     fig = go.Figure()
 
-    # Hard stop zone (danger zone)
-    if hard > 0:
-        fig.add_shape(
-            type="rect", x0=min_p, x1=hard, y0=0, y1=1,
-            fillcolor="rgba(39, 174, 96, 0.12)", line_width=0,
-            label=dict(text="危險區", font=dict(size=10, color="#27ae60")),
-        )
-
-    # Safe zone
-    if atr > 0:
-        fig.add_shape(
-            type="rect", x0=atr, x1=max_p, y0=0, y1=1,
-            fillcolor="rgba(231, 76, 60, 0.06)", line_width=0,
-        )
-
-    # Markers with better styling
-    markers_data = [
-        (hard, "硬停損", "#27ae60", "triangle-down", 16),
-        (kline, "K線停損", "#f39c12", "diamond", 14),
-        (atr, "ATR停損", "#3498db", "diamond", 14),
-        (entry, "買進價", "#95a5a6", "circle", 12),
-        (current, "現 價", "#ecf0f1", "star", 18),
-        (highest, "最高價", "#e74c3c", "triangle-up", 14),
+    # Line markers with better styling
+    line_styles = [
+        (hard, "🔽 硬停損", "#27ae60", "dot", 2),
+        (kline, "🔸 K線停損", "#f39c12", "dash", 2),
+        (atr, "🔹 ATR停損", "#3498db", "dash", 2),
+        (entry, "⚪ 買進價", "#95a5a6", "solid", 1.5),
+        (current, "⭐ 現價", "#ecf0f1", "solid", 3),
+        (highest, "🔺 最高價", "#e74c3c", "dot", 2),
     ]
 
-    for price, name, color, symbol, size in markers_data:
-        if price > 0:
-            fig.add_trace(go.Scatter(
-                x=[price], y=[0.5], mode="markers+text",
-                marker=dict(size=size, color=color, symbol=symbol,
-                            line=dict(width=1, color="rgba(255,255,255,0.3)")),
-                text=[f"{name}<br>{price:.1f}"],
-                textposition="top center",
-                textfont=dict(size=10, color=color),
-                name=name, showlegend=False,
-                hovertemplate=f"{name}: {price:.2f}<extra></extra>",
-            ))
+    if has_kline:
+        view_df = df.tail(60)  # last 60 trading days
+        x_dates = view_df.index.strftime('%Y-%m-%d')
+        k_min = view_df['Low'].min() * 0.95
+        k_max = view_df['High'].max() * 1.05
+        min_p = min(min_p, k_min)
+        max_p = max(max_p, k_max)
+
+        # Draw Candlesticks
+        fig.add_trace(go.Candlestick(
+            x=x_dates,
+            open=view_df['Open'], high=view_df['High'],
+            low=view_df['Low'], close=view_df['Close'],
+            name="K線",
+            increasing_line_color='#ef5350', decreasing_line_color='#26a69a',
+            showlegend=False
+        ))
+
+        # Horizontal level lines
+        for price, name, color, dash, width in line_styles:
+            if price > 0:
+                fig.add_hline(
+                    y=price, line_dash=dash, line_color=color, line_width=width
+                )
+                fig.add_annotation(
+                    x=1.02, y=price, xref="paper", yref="y",
+                    text=f"{name} {price:.1f}",
+                    showarrow=False,
+                    xanchor="left", yanchor="middle",
+                    font=dict(size=12, color=color, weight="bold" if "現價" in name else "normal")
+                )
+
+        fig.update_layout(
+            xaxis_rangeslider_visible=False,
+            xaxis=dict(type='category', showgrid=False, nticks=10, color="#555")
+        )
+    else:
+        # Fallback to horizontal segments if no K-line
+        for price, name, color, dash, width in line_styles:
+            if price > 0:
+                fig.add_trace(go.Scatter(
+                    x=[0.1, 0.9], y=[price, price], 
+                    mode="lines+text",
+                    line=dict(color=color, width=width, dash=dash),
+                    text=["", f"{name} {price:.1f}"],
+                    textposition="middle right",
+                    textfont=dict(size=13, color=color),
+                    name=name, showlegend=False,
+                    hovertemplate=f"{name}: {price:.2f}<extra></extra>",
+                ))
+        fig.update_layout(xaxis=dict(visible=False, range=[0, 1]))
+
+    # Highlight zones (hrect works for both x-axis types since it anchors to y)
+    if hard > 0:
+        fig.add_hrect(
+            y0=min_p, y1=hard, fillcolor="rgba(39, 174, 96, 0.08)", line_width=0,
+            annotation_text="危險區", annotation_position="bottom left",
+            annotation_font=dict(size=10, color="rgba(39, 174, 96, 0.5)"), layer="below"
+        )
+    if atr > 0:
+        fig.add_hrect(
+            y0=atr, y1=max_p, fillcolor="rgba(231, 76, 60, 0.04)", line_width=0,
+            layer="below"
+        )
 
     fig.update_layout(
-        height=120,
-        margin=dict(t=35, b=15, l=10, r=10),
-        xaxis=dict(
+        height=350,
+        margin=dict(t=15, b=25, l=10, r=100),
+        yaxis=dict(
             range=[min_p, max_p], showgrid=False,
             tickformat=".1f", color="#888",
-            title=dict(text="價格軸", font=dict(size=10, color="#555")),
+            title=dict(text="價格", font=dict(size=10, color="#555")),
         ),
-        yaxis=dict(visible=False, range=[0, 1]),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, width="stretch", key=f"gauge_{ticker}")
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"gauge_{ticker}")

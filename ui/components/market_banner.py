@@ -51,7 +51,7 @@ def render(market_score: float | None, scan_date: str, ab_count: int) -> None:
     col1, col2, col3, col4 = st.columns([2.5, 1.2, 1.2, 1.2])
 
     with col1:
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
 
     with col2:
         st.markdown(f"""

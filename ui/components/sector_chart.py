@@ -71,7 +71,7 @@ def render(scanner_df: pd.DataFrame) -> None:
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
 
         # 簡潔的統計表格
         if score_col:
@@ -102,4 +102,4 @@ def render(scanner_df: pd.DataFrame) -> None:
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})

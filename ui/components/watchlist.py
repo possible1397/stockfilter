@@ -52,7 +52,7 @@ def _render_converging(df: pd.DataFrame) -> None:
         st.info("目前無收斂中標的")
         return
 
-    cols = [c for c in ["股票代號", "產業別", "進場總分", "收盤價", "ATR", "主要產品"] if c in converging.columns]
+    cols = [c for c in ["股票代號", "產業別", "進場總分", "收盤價", "ATR", "操作建議", "主要產品"] if c in converging.columns]
     if "進場總分" in converging.columns:
         converging = converging.sort_values("進場總分", ascending=False)
 
@@ -77,6 +77,12 @@ def _render_diag(df: pd.DataFrame) -> None:
     if df.empty:
         st.info("今日無診斷資料")
         return
+
+    if "failure_stage" in df.columns:
+        df = df[df["failure_stage"] != "通過"]
+        if df.empty:
+            st.info("今日無接近入選標的")
+            return
 
     if "watchlist_score" in df.columns:
         df = df.sort_values("watchlist_score", ascending=False)
@@ -111,6 +117,10 @@ def _render_diag(df: pd.DataFrame) -> None:
         fmt[zh_vol] = "{:.2f}"
     if zh_conv in display.columns:
         fmt[zh_conv] = "{:.2f}"
+    
+    zh_bar_span = _DIAG_COL_MAP.get("bar_span", "bar_span")
+    if zh_bar_span in display.columns:
+        fmt[zh_bar_span] = "{:.0f}"
 
     styled = display.style.apply(_color, axis=1)
     if fmt:

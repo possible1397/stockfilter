@@ -138,20 +138,6 @@ class PositionManager:
                 return
         logger.warning(f"[PositionManager] 找不到 {ticker} 持倉")
 
-    @staticmethod
-    def _calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
-        """計算 ATR"""
-        if len(df) < period:
-            return float(df['High'].iloc[-1] - df['Low'].iloc[-1])
-        high = df['High'].values[-period:]
-        low = df['Low'].values[-period:]
-        close = df['Close'].values[-period:]
-        prev_close = np.roll(close, 1)
-        tr = np.maximum(high - low,
-                        np.maximum(np.abs(high - prev_close),
-                                   np.abs(low - prev_close)))
-        return float(np.mean(tr[1:]))
-
     def monitor(self, stock_data: dict) -> List[PositionAdvice]:
         """
         針對所有持倉，根據最新行情計算操作建議
@@ -169,31 +155,60 @@ class PositionManager:
             # --- 1. 硬停損 ---
             hard_stop = round(pos.entry_price * (1 - self.stop_loss_pct), 2)
 
-            # --- 2. ATR 追蹤止損 ---
-            if self.dynamic_atr:
-                atr = self._calculate_atr(df)
-            else:
-                # 靜態：用進場日附近的 ATR
-                entry_ts = pd.Timestamp(pos.entry_date)
-                df_entry = df[df.index <= entry_ts]
-                atr = self._calculate_atr(df_entry) if len(df_entry) >= 14 else self._calculate_atr(df)
-
-            # 找持倉期間最高價
+            # --- 向量化每日追蹤停損計算 (棘輪機制：只進不退) ---
+            df_calc = df.copy()
             entry_ts = pd.Timestamp(pos.entry_date)
-            df_held = df[df.index >= entry_ts]
-            highest = float(df_held['High'].max()) if not df_held.empty else current_price
 
-            if profit_pct >= self.atr_activate_pct:
-                atr_trail_stop = round(highest - atr * self.atr_mult, 2)
+            # 計算 ATR (14日移動平均)
+            df_calc['PrevClose'] = df_calc['Close'].shift(1)
+            df_calc['TR'] = np.maximum(
+                df_calc['High'] - df_calc['Low'],
+                np.maximum(
+                    (df_calc['High'] - df_calc['PrevClose']).abs(),
+                    (df_calc['Low'] - df_calc['PrevClose']).abs()
+                )
+            )
+            df_calc['ATR'] = df_calc['TR'].rolling(window=14).mean()
+
+            # 計算是否達標啟動追蹤
+            df_calc['ProfitPct'] = (df_calc['Close'] / pos.entry_price) - 1
+            mask_held = df_calc.index >= entry_ts
+            
+            # 建立啟動旗標 (一旦某日大於等於門檻，往後皆為 True)
+            df_calc['IsActive'] = df_calc['ProfitPct'] >= self.atr_activate_pct
+            df_calc.loc[mask_held, 'ActiveFlag'] = df_calc.loc[mask_held, 'IsActive'].cummax()
+            df_calc['ActiveFlag'] = df_calc['ActiveFlag'].fillna(False)
+
+            # K線停損邏輯: min(前一日最低, 前一日收盤)
+            df_calc['PrevLow'] = df_calc['Low'].shift(1)
+            df_calc['KlineStop'] = df_calc[['PrevLow', 'PrevClose']].min(axis=1)
+
+            # ATR停損邏輯: 持倉期間最高價 - 目前ATR * 倍數
+            df_calc.loc[mask_held, 'HighestHeld'] = df_calc.loc[mask_held, 'High'].cummax()
+            
+            # 使用動態或靜態 ATR
+            if self.dynamic_atr:
+                df_calc['CurrentATR'] = df_calc['ATR']
             else:
-                atr_trail_stop = 0  # 尚未啟動
+                historical_atr = df_calc[df_calc.index <= entry_ts]['ATR'].dropna()
+                static_atr = historical_atr.iloc[-1] if not historical_atr.empty else df_calc['ATR'].dropna().iloc[-1]
+                df_calc['CurrentATR'] = static_atr
+                
+            df_calc['ATRStop'] = df_calc['HighestHeld'] - df_calc['CurrentATR'] * self.atr_mult
 
-            # --- 3. K 線追蹤止損 ---
-            kline_trail_stop = 0.0
-            if self.k_line_trail and profit_pct >= self.atr_activate_pct and len(df) >= 2:
-                prev_low = float(df['Low'].iloc[-2])
-                prev_close = float(df['Close'].iloc[-2])
-                kline_trail_stop = round(min(prev_low, prev_close), 2)
+            # 抓取有啟動追蹤的日子，並實施棘輪 (Ratchet) 機制找出累積最大值
+            active_df = df_calc[df_calc['ActiveFlag']]
+
+            if not active_df.empty:
+                atr_trail_stop = round(float(active_df['ATRStop'].max()), 2)
+                kline_trail_stop = round(float(active_df['KlineStop'].max()), 2) if self.k_line_trail else 0.0
+            else:
+                atr_trail_stop = 0.0
+                kline_trail_stop = 0.0
+
+            # 找持倉期間總結的最高價 (供記錄顯示)
+            df_held = df[mask_held]
+            highest = float(df_held['High'].max()) if not df_held.empty else current_price
 
             # --- 最終建議止損：取三者最高 ---
             active_stops = [hard_stop]
