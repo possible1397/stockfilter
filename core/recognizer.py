@@ -1,8 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.signal import argrelextrema
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from utils.logger import get_logger
 
@@ -217,12 +216,13 @@ class PatternRecognizer:
         result.current_price     = round(current_price, 2)
         result.resistance_price  = round(resist_end, 2)
         result.support_price     = round(support_end, 2)
-        result.pattern_score     = self._calculate_pattern_score(result, df)
-        result.breakout_score    = self._calculate_breakout_score(result, df)
+        result.pattern_score     = self._calculate_pattern_score(result, df, high_col, low_col)
+        result.breakout_score    = self._calculate_breakout_score(result, df, vol_col)
 
         return result
 
-    def _calculate_pattern_score(self, result: TriangleResult, df: pd.DataFrame) -> float:
+    def _calculate_pattern_score(self, result: TriangleResult, df: pd.DataFrame,
+                                 high_col: str = 'High', low_col: str = 'Low') -> float:
         """量化型態品質 (0-100)"""
         balance = abs(result.slope_up + result.slope_down)
         balance_score = max(0, 40 - (balance * 100))
@@ -230,7 +230,7 @@ class PatternRecognizer:
         conv_score = max(0, 40 * (1 - result.convergence_ratio))
 
         try:
-            high_low   = df['High'] - df['Low']
+            high_low   = df[high_col] - df[low_col]
             recent_atr = high_low.tail(5).mean()
             avg_atr    = high_low.tail(20).mean()
             atr_ratio  = recent_atr / avg_atr if avg_atr > 0 else 1.0
@@ -240,24 +240,28 @@ class PatternRecognizer:
 
         return float(min(100, balance_score + conv_score + atr_score))
 
-    def _calculate_breakout_score(self, result: TriangleResult, df: pd.DataFrame) -> float:
+    def _calculate_breakout_score(self, result: TriangleResult, df: pd.DataFrame,
+                                  vol_col: str = 'Volume') -> float:
         """量化突破品質 (0-100)"""
         if not result.is_breakout:
             return 0.0
 
         try:
-            last_vol  = float(df['Volume'].values.flatten()[-1])
-            ma20_vol  = float(df['Volume'].rolling(20).mean().values.flatten()[-1])
+            last_vol  = float(df[vol_col].values.flatten()[-1])
+            ma20_vol  = float(df[vol_col].rolling(20).mean().values.flatten()[-1])
             vol_ratio = last_vol / ma20_vol if ma20_vol > 0 else 1.0
             vol_score = min(60, (vol_ratio / 2) * 60)
         except Exception:
             vol_score = 30
 
         try:
-            last_row  = df.iloc[-1]
-            h, l, c   = last_row['High'], last_row['Low'], last_row['Close']
-            range_pos = (c - l) / (h - l) if (h - l) > 0 else 0.5
-            pos_score = range_pos * 40
+            close_col = 'Close' if 'Close' in df.columns else 'close'
+            high_col_  = 'High'  if 'High'  in df.columns else 'high'
+            low_col_   = 'Low'   if 'Low'   in df.columns else 'low'
+            last_row   = df.iloc[-1]
+            h, l, c    = last_row[high_col_], last_row[low_col_], last_row[close_col]
+            range_pos  = (c - l) / (h - l) if (h - l) > 0 else 0.5
+            pos_score  = range_pos * 40
         except Exception:
             pos_score = 20
 

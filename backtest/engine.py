@@ -23,6 +23,11 @@ from typing import Optional, Dict
 from core.recognizer import PatternRecognizer
 from core.market_regime import MarketRegimeDetector
 from backtest.metrics import calculate_metrics, BacktestMetrics
+from utils.indicators import calculate_atr
+
+
+def _today_str() -> str:
+    return datetime.today().strftime('%Y-%m-%d')
 
 
 @dataclass
@@ -30,7 +35,7 @@ class BacktestConfig:
     """回測參數配置"""
     # 時間範圍
     start_date: str = "2025-01-01"
-    end_date: str = "2026-03-20"
+    end_date: str = ""          # 空字串 = 自動使用今日日期
 
     # PatternRecognizer 參數 (需與 config.yaml pattern: 區段一致)
     order: int = 5
@@ -153,6 +158,8 @@ class BacktestEngine:
 
     def __init__(self, config: BacktestConfig = None):
         self.config = config or BacktestConfig()
+        if not self.config.end_date:
+            self.config.end_date = _today_str()
         self.trades: list[Trade] = []
         self.active_positions: dict = {}
         self.market_data: Dict[str, pd.DataFrame] = {}
@@ -224,20 +231,7 @@ class BacktestEngine:
             cost += self.config.tax_rate
         return cost
 
-    def _calculate_atr(self, df_up_to: pd.DataFrame, entry_price: float) -> float:
-        """計算 14 日 ATR"""
-        if len(df_up_to) >= 14:
-            highs = df_up_to['High'].values[-14:]
-            lows = df_up_to['Low'].values[-14:]
-            closes = df_up_to['Close'].values[-14:]
-            prev_closes = np.roll(closes, 1)
-            tr = np.maximum(highs - lows,
-                            np.maximum(np.abs(highs - prev_closes),
-                                       np.abs(lows - prev_closes)))
-            return float(np.mean(tr[1:]))  # 排除第一個 (roll artifact)
-        return entry_price * 0.03  # 預設 3%
-
-    def _check_exit(self, ticker: str, pos: dict, current_bar: pd.Series,
+    def _check_exit(self, _ticker: str, pos: dict, current_bar: pd.Series,
                     day_count: int, ma20: float = None,
                     df_up_to: pd.DataFrame = None) -> Optional[tuple]:
         """
@@ -261,7 +255,7 @@ class BacktestEngine:
 
         # 0. 動態 ATR 更新 (每日重算，而非只用進場日數值)
         if self.config.dynamic_atr_update and df_up_to is not None and 'atr' in pos:
-            new_atr = self._calculate_atr(df_up_to, entry_price)
+            new_atr = calculate_atr(df_up_to)
             if new_atr > 0:
                 pos['atr'] = new_atr
 
@@ -323,7 +317,7 @@ class BacktestEngine:
                        entry_price: float, entry_date: str,
                        df_up_to: pd.DataFrame):
         """建立持倉記錄"""
-        atr = self._calculate_atr(df_up_to, entry_price)
+        atr = calculate_atr(df_up_to)
         self.active_positions[ticker] = {
             'entry_date': entry_date,
             'entry_price': entry_price,
@@ -637,14 +631,12 @@ class BacktestEngine:
 
 if __name__ == "__main__":
     import data.database as db_module
-    from data.cleaner import DataCleaner
 
     print("=== 回測引擎測試 ===")
     db_module.init_db()
 
     config = BacktestConfig.from_yaml("config.yaml")
     config.start_date = "2025-06-01"
-    config.end_date = "2026-03-15"
 
     engine = BacktestEngine(config)
 

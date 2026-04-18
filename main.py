@@ -7,13 +7,14 @@
     python main.py --sample   # 僅用 5 檔樣本測試 (開發時使用)
 """
 
+import concurrent.futures
 import csv
 import os
 import sys
 from datetime import datetime
+from typing import Optional
 
 import yaml
-import numpy as np
 import pandas as pd
 
 from utils.logger import setup_logging, get_logger
@@ -23,12 +24,13 @@ from data.stock_list import get_all_tickers
 from core.recognizer import PatternRecognizer
 from core.market_regime import MarketRegimeDetector
 from core.sector_rotation import SectorRotationEngine
-from core.scorer import StrategyScorer, StrategyScore
+from core.scorer import StrategyScorer
 from core.supply_chain import SupplyChainEngine
 from core.convergence_scanner import ConvergenceScanner
 from core.chip_analysis import ChipAnalyzer
 from core.position_manager import PositionManager
 from utils.visualizer import Visualizer
+from utils.indicators import calculate_atr
 import data.database as db_module
 
 # ==================== 載入設定 ====================
@@ -115,19 +117,6 @@ def _print_funnel_report(all_results):
                 logger.info(f"    {r.ticker:10} | {STAGE_LABEL[r.failure_stage]:12} | {r.reason}")
 
 
-def _calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
-    """計算 14 日 ATR（與回測引擎同邏輯）"""
-    if df is None or len(df) < period + 1:
-        close = float(df['Close'].iloc[-1]) if df is not None and not df.empty else 0
-        return close * 0.03
-    highs      = df['High'].values[-period:]
-    lows       = df['Low'].values[-period:]
-    closes     = df['Close'].values[-period:]
-    prev_close = np.roll(closes, 1)
-    tr = np.maximum(highs - lows,
-                    np.maximum(np.abs(highs - prev_close),
-                               np.abs(lows - prev_close)))
-    return float(np.mean(tr[1:]))
 
 
 def _build_action_plan(result, atr: float, cfg: dict) -> tuple:
@@ -151,10 +140,9 @@ def _build_action_plan(result, atr: float, cfg: dict) -> tuple:
         entry_ref = result.resistance_price
         status_str = "突破後進場"
 
-    stop_price   = round(entry_ref * (1 - stop_loss_pct), 2)
-    target_price = round(entry_ref * (1 + take_profit_pct), 2)
-    atr_activates_at = round(entry_ref * (1 + atr_activate_pct), 2)
-    atr_trail_stop   = round(entry_ref - atr * atr_mult, 2)
+    stop_price     = round(entry_ref * (1 - stop_loss_pct), 2)
+    target_price   = round(entry_ref * (1 + take_profit_pct), 2)
+    atr_trail_stop = round(entry_ref - atr * atr_mult, 2)
 
     if result.is_breakout:
         action = (f"【{status_str}】次日開盤介入 "
@@ -226,7 +214,7 @@ def _calc_watchlist_score(r) -> int:
     return min(score, 100)
 
 
-def _save_diag_csv(all_results, supply_eng, path):
+def _save_diag_csv(all_results, path):
     import csv as _csv
     from data.stock_list import get_stock_name
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -416,11 +404,16 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     logger.info(f"[Step 3] 全市場三角收斂掃描 (共 {len(valid_data)} 檔，不過濾族群)...")
     all_scan_results = []     # 收集所有結果（含被淘汰的）
     converging_results = []
-    for ticker, df in valid_data.items():
-        result = recognizer.analyze(ticker, df)
-        all_scan_results.append(result)
-        if result.is_converging:
-            converging_results.append(result)
+
+    def _analyze_one(item):
+        ticker, df = item
+        return recognizer.analyze(ticker, df)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as _pool:
+        for result in _pool.map(_analyze_one, valid_data.items()):
+            all_scan_results.append(result)
+            if result.is_converging:
+                converging_results.append(result)
 
     _print_funnel_report(all_scan_results)
 
@@ -437,7 +430,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
             ])
             writer.writeheader()
         logger.info(f"  報表已輸出至: {results_csv} (0 筆)")
-        _save_diag_csv(all_scan_results, supply_eng, diag_csv)
+        _save_diag_csv(all_scan_results, diag_csv)
 
         # 即使無新收斂標的，仍需監控持倉
         _run_position_monitor(fetcher, {}, target_date, date_str)
@@ -472,6 +465,16 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     # Step 6: 綜合評分
     # ============================================================
     logger.info("[Step 6] 綜合量化評分...")
+    # 批次預載所有收斂標的的籌碼資料，避免迴圈中逐一開啟 SQLite 連線
+    date_cutoff = target_date.strftime('%Y-%m-%d')
+    chip_cache: dict = {}
+    for _r in converging_results:
+        _df = db_module.load_chip_data(_r.ticker, DB_PATH)
+        if _df is not None and not _df.empty:
+            chip_cache[_r.ticker] = _df.loc[:date_cutoff]
+        else:
+            chip_cache[_r.ticker] = _df
+
     score_results = []
     for result in converging_results:
         opp = opp_map.get(result.ticker)
@@ -480,12 +483,8 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
         b_score = result.breakout_score
         d_score = opp.density_score if opp else 0
         c_score = supply_eng.get_chain_score(result.ticker, valid_data)
-        
-        chip_df = db_module.load_chip_data(result.ticker, DB_PATH)
-        # 籌碼資料同樣需要裁切
-        if chip_df is not None and not chip_df.empty:
-            chip_df = chip_df.loc[:target_date.strftime('%Y-%m-%d')]
 
+        chip_df  = chip_cache.get(result.ticker)
         chip_res = chip_eng.analyze(result.ticker, valid_data[result.ticker], chip_df)
         chip_score_val = chip_res['score'] if chip_res else 0.0
         chip_details = chip_res.get('details', {}) if chip_res else {}
@@ -506,7 +505,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
         )
 
         df_ticker = valid_data.get(result.ticker, pd.DataFrame())
-        atr_val = _calculate_atr(df_ticker)
+        atr_val = calculate_atr(df_ticker)
         _, stop_p, target_p, _ = _build_action_plan(result, atr_val, CFG)
         bk_tag = " [突破]" if result.is_breakout else ""
         logger.info(
@@ -541,7 +540,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
 
             if pattern_detail:
                 df_ticker = valid_data.get(r.ticker, pd.DataFrame())
-                atr_val = _calculate_atr(df_ticker)
+                atr_val = calculate_atr(df_ticker)
                 entry_ref, stop_p, target_p, action = _build_action_plan(
                     pattern_detail, atr_val, CFG)
                 current_p = pattern_detail.current_price
@@ -574,7 +573,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
         logger.info("  本次掃描未找到符合條件的標的。")
 
     # 診斷 CSV（不論有無通過標的都輸出）
-    _save_diag_csv(all_scan_results, supply_eng, diag_csv)
+    _save_diag_csv(all_scan_results, diag_csv)
 
     a_count = sum(1 for r in score_results if r.opportunity_grade == 'A')
     b_count = sum(1 for r in score_results if r.opportunity_grade == 'B')

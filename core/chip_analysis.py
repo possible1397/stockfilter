@@ -16,7 +16,7 @@ class ChipAnalyzer:
         self.target_shares = self.config.get('chip', {}).get('target_lots', 500) * 1000
         self.absorption_ratio = self.config.get('chip', {}).get('absorption_ratio', 0.03)
 
-    def analyze(self, ticker: str, price_df: pd.DataFrame, chip_df: pd.DataFrame) -> Dict[str, Any]:
+    def analyze(self, _ticker: str, price_df: pd.DataFrame, chip_df: pd.DataFrame) -> Dict[str, Any]:
         """
         分析籌碼並給出評分。
         回傳值包含 'score' (總分) 與 'details' (詳細各項加分)。
@@ -120,25 +120,31 @@ class ChipAnalyzer:
             
         result['details']['concentration_score'] = min(concentration_score, 30)
         
-        # 總分 (目前上限為 40+30+0 = 70，若滿分要 100，將依比例給予)
-        total_score = result['details']['momentum_score'] + result['details']['absorption_score'] + result['details']['concentration_score']
-        
-        # 如果大戶資料尚未實作，滿分為 70，我們將其 normalize 到 100
-        # 這樣在 scorer 中 20% weight 才能發揮效用
-        normalized_score = (total_score / 70.0) * 100.0 if total_score > 0 else 0.0
-        
+        # 各維度滿分加總，動態計算以避免硬寫死除數
+        max_possible = 50 + 30 + 30  # momentum + absorption + concentration
+        total_score = (result['details']['momentum_score']
+                       + result['details']['absorption_score']
+                       + result['details']['concentration_score'])
+
+        normalized_score = (total_score / max_possible) * 100.0 if total_score > 0 else 0.0
+
         result['score'] = min(normalized_score, 100.0)
         return result
 
     def _get_consecutive_days(self, df: pd.DataFrame, col_name: str) -> int:
-        """計算連續大於 0 的天數 (從最後一天往前推)"""
+        """計算連續大於 0 的天數 (從最後一天往前推，向量化實作)"""
         if col_name not in df.columns:
             return 0
-            
-        streak = 0
-        # 反轉 DataFrame 從最新往舊算
-        for val in df[col_name][::-1]:
-            if pd.isna(val) or val <= 0:
-                break
-            streak += 1
-        return streak
+
+        series = df[col_name].reset_index(drop=True)
+        # 標記每個位置是否 > 0 (NaN 視為 False)
+        positive = series.gt(0).fillna(False)
+        if not positive.iloc[-1]:
+            return 0
+        # 找出最後一段連續 True 的起始位置
+        reversed_positive = positive.iloc[::-1].reset_index(drop=True)
+        first_false = reversed_positive.eq(False).idxmax()
+        # 若全部都是 True，idxmax 回傳 0 但值是 False → 代表沒有 False
+        if not reversed_positive.iloc[first_false]:
+            return len(series)
+        return int(first_false)

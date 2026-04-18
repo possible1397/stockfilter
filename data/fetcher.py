@@ -206,19 +206,51 @@ class StockFetcher:
             logger.debug(f"[TPEX Chip] {date_dt.strftime('%Y-%m-%d')} 取得失敗或為非交易日: {e}")
             return pd.DataFrame()
 
+    def _get_latest_chip_date(self) -> Optional[str]:
+        """查詢 chip_data 中最新一筆日期 (以指標股 2330.TW 為基準)"""
+        try:
+            with db_module.get_connection(self.db_path) as conn:
+                cursor = conn.execute(
+                    "SELECT MAX(date) FROM chip_data WHERE ticker='2330.TW'"
+                )
+                res = cursor.fetchone()
+                return res[0] if res and res[0] else None
+        except Exception:
+            return None
+
     def update_market_chip_data(self, days: int = 30):
-        """下載過去 N 個交易日的法人籌碼資料，批次寫入 SQLite"""
+        """下載過去 N 個交易日的法人籌碼資料，批次寫入 SQLite。
+        已存在於 DB 的日期直接跳過，避免重複下載。"""
         logger.info(f"[Fetcher] 開始更新全市場籌碼資料 (過去 {days} 交易日)...")
+
+        # 找出 DB 中已有的最新日期，只下載更新的部分
+        latest_str = self._get_latest_chip_date()
+        latest_date = None
+        if latest_str:
+            try:
+                latest_date = datetime.strptime(latest_str, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+
         today = datetime.today()
         current_date = today
         days_processed = 0
-        
+
         while days_processed < days:
             if self._is_trading_day(current_date):
+                date_only = current_date.date()
+
+                # 已有資料則跳過
+                if latest_date and date_only <= latest_date:
+                    logger.debug(f"  [Chip Data] {current_date.strftime('%Y-%m-%d')} 已存在，跳過")
+                    days_processed += 1
+                    current_date -= timedelta(days=1)
+                    continue
+
                 twse_date = current_date.strftime('%Y%m%d')
                 df_twse = self._fetch_twse_chip_day(twse_date)
                 df_tpex = self._fetch_tpex_chip_day(current_date)
-                
+
                 if not df_twse.empty or not df_tpex.empty:
                     df_all = pd.concat([df_twse, df_tpex], ignore_index=True)
                     if not df_all.empty:
@@ -226,17 +258,17 @@ class StockFetcher:
                     logger.info(f"  [Chip Data] 完成 {current_date.strftime('%Y-%m-%d')} ({len(df_all)} 檔)")
                 else:
                     logger.debug(f"  [Chip Data] {current_date.strftime('%Y-%m-%d')} 查無資料 (可能為國定假日)")
-                
+
                 days_processed += 1
                 time.sleep(random.uniform(0.5, 1.0))
-                
+
             current_date -= timedelta(days=1)
-            
+
             # 安全機制，避免進入無窮迴圈
             if (today - current_date).days > days * 3:
                 break
-        
-        logger.info(f"[Fetcher] 籌碼資料更新完成！")
+
+        logger.info("[Fetcher] 籌碼資料更新完成！")
 
     def close(self):
         """相容介面：無狀態架構下不需要實際關閉連線"""

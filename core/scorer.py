@@ -1,4 +1,3 @@
-import pandas as pd
 from dataclasses import dataclass
 
 
@@ -26,7 +25,8 @@ class StrategyScorer:
         # 權重分配 (總和 100%)
         self.weights = weights or {
             'market':   0.10,   # 大盤環境
-            'density':  0.25,   # 收斂密度 (核心：預測輪動)
+            'sector':   0.05,   # 族群動能
+            'density':  0.20,   # 收斂密度 (核心：預測輪動)
             'pattern':  0.15,   # 型態品質
             'breakout': 0.10,   # 突破即時性
             'chain':    0.15,   # 供應鏈動能
@@ -42,6 +42,7 @@ class StrategyScorer:
         """
         total = (
             m_score       * self.weights['market'] +
+            s_score       * self.weights['sector'] +
             density_score * self.weights['density'] +
             p_score       * self.weights['pattern'] +
             b_score       * self.weights['breakout'] +
