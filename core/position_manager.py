@@ -242,13 +242,15 @@ class PositionManager:
                 )
 
             stop_label = "動態ATR" if atr_trail_stop >= kline_trail_stop else "前日K線"
+            is_profitable = profit_pct > 0
+            trail_term = "停利" if is_profitable else "停損"
             action_parts.append(
-                f"[S] 追蹤停損: {recommended_stop} ({stop_label}) "
+                f"[S] 追蹤{trail_term}: {recommended_stop} ({stop_label}) "
                 f"| 硬停損: {hard_stop}"
             )
 
             if current_price < recommended_stop:
-                action_parts.insert(0, f"[!!] 已跌破追蹤停損 {recommended_stop}，建議立即出場！")
+                action_parts.insert(0, f"[!!] 已跌破追蹤{trail_term} {recommended_stop}，建議立即出場！")
 
             advice = PositionAdvice(
                 ticker=pos.ticker,

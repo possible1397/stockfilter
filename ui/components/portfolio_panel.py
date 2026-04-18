@@ -88,7 +88,8 @@ def _render_position_card(row: pd.Series) -> None:
         status_emoji = "🟢"
 
     is_danger = current_val > 0 and recommended_val > 0 and current_val < recommended_val
-    danger_text = " ‼️ 跌破停損" if is_danger else ""
+    trail_term = "停利" if profit_val > 0 else "停損"
+    danger_text = f" ‼️ 跌破{trail_term}" if is_danger else ""
 
     # --- Card using st.container + native components ---
     with st.container(border=True):
@@ -121,11 +122,11 @@ def _render_position_card(row: pd.Series) -> None:
         with s1:
             st.metric("硬停損", f"{hard_stop}", help="買進價 x (1 - 止損比例)")
         with s2:
-            st.metric("ATR 追蹤停損", f"{atr_stop}", help="最高價 - ATR*倍數")
+            st.metric(f"ATR 追蹤{trail_term}", f"{atr_stop}", help="最高價 - ATR*倍數")
         with s3:
-            st.metric("K線追蹤停損", f"{kline_stop}", help="前一日最低價")
+            st.metric(f"K線追蹤{trail_term}", f"{kline_stop}", help="前一日最低價")
         with s4:
-            st.metric("★ 建議停損", f"{recommended_stop}", help="取 ATR 與 K線 的較高者")
+            st.metric(f"★ 建議{trail_term}", f"{recommended_stop}", help="取 ATR 與 K線 的較高者")
 
         # Stop-loss visualization
         _render_stop_gauge(ticker, current_val,
