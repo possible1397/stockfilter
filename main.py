@@ -144,16 +144,22 @@ def _build_action_plan(result, atr: float, cfg: dict) -> tuple:
     target_price   = round(entry_ref * (1 + take_profit_pct), 2)
     atr_trail_stop = round(entry_ref - atr * atr_mult, 2)
 
+    profit_str = (f"目標停利:{target_price} (進場價+{take_profit_pct*100:.0f}%)"
+                  if take_profit_pct > 0 else "停利:ATR追蹤決定出場")
+
     if result.is_breakout:
         action = (f"【{status_str}】次日開盤介入 "
-                  f"| 硬停損:{stop_price} ({stop_loss_pct*100:.0f}%) "
-                  f"| 停利:{target_price} ({take_profit_pct*100:.0f}%) "
+                  f"| 進場後停損:{stop_price} (進場價-{stop_loss_pct*100:.0f}%) "
+                  f"| {profit_str} "
                   f"| ATR追蹤:浮盈>{atr_activate_pct*100:.0f}%後啟動 "
                   f"(初始線:{atr_trail_stop})")
     else:
-        action = (f"【{status_str}】預掛觸價:{result.resistance_price:.2f} "
-                  f"| 硬停損:{stop_price} ({stop_loss_pct*100:.0f}%) "
-                  f"| 停利:{target_price} ({take_profit_pct*100:.0f}%) "
+        dist_pct = (result.resistance_price / result.current_price - 1) * 100
+        action = (f"【等待突破·勿追高】"
+                  f"觸價掛單:{result.resistance_price:.2f} "
+                  f"(現價{result.current_price:.2f}，距觸發+{dist_pct:.1f}%) "
+                  f"| 進場後停損:{stop_price} (進場價-{stop_loss_pct*100:.0f}%，非現在停損) "
+                  f"| {profit_str} "
                   f"| ATR追蹤:進場後浮盈>{atr_activate_pct*100:.0f}%啟動")
 
     return entry_ref, stop_price, target_price, action
@@ -214,7 +220,7 @@ def _calc_watchlist_score(r) -> int:
     return min(score, 100)
 
 
-def _save_diag_csv(all_results, path):
+def _save_diag_csv(all_results, path, sector_eng=None, supply_eng=None):
     import csv as _csv
     from data.stock_list import get_stock_name
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -227,17 +233,22 @@ def _save_diag_csv(all_results, path):
     with open(path, 'w', newline='', encoding='utf-8-sig') as f:
         fieldnames = [
             'watchlist_score', 'failure_stage', 'ticker', 'name',
+            '產業別', '主要產品',
             'vol_ratio', 'convergence_ratio', 'bar_span',
             'peak_count', 'valley_count', 'reason'
         ]
         w = _csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for r in rows:
+            sector_name = sector_eng.get_sector(r.ticker) if sector_eng else ""
+            product_desc = supply_eng.get_product_description(r.ticker) if supply_eng else ""
             w.writerow({
                 'watchlist_score':   _calc_watchlist_score(r),
                 'failure_stage':     STAGE_LABEL.get(r.failure_stage, r.failure_stage),
                 'ticker':            r.ticker,
                 'name':              get_stock_name(r.ticker),
+                '產業別':             sector_name,
+                '主要產品':           product_desc,
                 'vol_ratio':         round(r.diag_vol_ratio, 3),
                 'convergence_ratio': round(r.convergence_ratio, 3) if r.convergence_ratio and r.convergence_ratio < 1 else '',
                 'bar_span':          r.bar_span or '',
@@ -248,7 +259,7 @@ def _save_diag_csv(all_results, path):
     logger.info(f"  診斷 CSV 已輸出至: {path}")
 
 
-def _run_position_monitor(fetcher, valid_data: dict, target_date, date_str: str):
+def _run_position_monitor(fetcher, valid_data: dict, target_date, date_str: str, sector_eng=None, supply_eng=None):
     """
     持倉監控 (Step 8)：讀取 my_positions.json，計算動態操作建議。
     即使當天無收斂標的，仍會執行此步驟，確保持倉股票不被遺漏。
@@ -281,15 +292,19 @@ def _run_position_monitor(fetcher, valid_data: dict, target_date, date_str: str)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(pos_csv, 'w', newline='', encoding='utf-8-sig') as f:
         fieldnames = [
-            '股票代號', '買進均價', '現價', '損益%', '剩餘比例',
+            '股票代號', '產業別', '主要產品', '買進均價', '現價', '損益%', '剩餘比例',
             '硬停損', 'ATR追蹤停損', 'K線追蹤停損', '建議停損',
             '持倉最高價', '操作建議',
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for adv in advices:
+            sector_name = sector_eng.get_sector(adv.ticker) if sector_eng else ""
+            product_desc = supply_eng.get_product_description(adv.ticker) if supply_eng else ""
             writer.writerow({
                 '股票代號':     adv.ticker,
+                '產業別':       sector_name,
+                '主要產品':     product_desc,
                 '買進均價':     adv.entry_price,
                 '現價':         adv.current_price,
                 '損益%':        adv.profit_pct,
@@ -430,10 +445,10 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
             ])
             writer.writeheader()
         logger.info(f"  報表已輸出至: {results_csv} (0 筆)")
-        _save_diag_csv(all_scan_results, diag_csv)
+        _save_diag_csv(all_scan_results, diag_csv, sector_eng, supply_eng)
 
         # 即使無新收斂標的，仍需監控持倉
-        _run_position_monitor(fetcher, {}, target_date, date_str)
+        _run_position_monitor(fetcher, {}, target_date, date_str, sector_eng, supply_eng)
 
         fetcher.close()
         return []
@@ -456,7 +471,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     # Step 5: A/B/C 機會分級 (含 Leader-Laggard 偵測)
     # ============================================================
     logger.info("[Step 5] 機會分級 + Leader-Laggard 偵測...")
-    opportunities = conv_scan.classify_opportunities(converging_results, sector_densities, valid_data)
+    opportunities = conv_scan.classify_opportunities(converging_results, sector_densities, valid_data, top_sectors_df)
     conv_scan.print_opportunity_report(opportunities)
 
     opp_map = {o.ticker: o for o in opportunities}
@@ -529,7 +544,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     with open(results_csv, 'w', newline='', encoding='utf-8-sig') as f:
         fieldnames = [
             '族群等級', '股票代號', '產業別', '狀態',
-            '進場總分', '收盤價', '停損價', 'ATR',
+            '進場總分', '收盤價', '進場後停損', 'ATR',
             '主要產品', '籌碼分', '法人連續買超天數', '目標價', '操作建議',
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -555,12 +570,12 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
                 '狀態':           status,
                 '進場總分':       round(r.total_score, 2),
                 '收盤價':         round(current_p, 2),
-                '停損價':         stop_p,
+                '進場後停損':      stop_p,
                 'ATR':            float(f'{atr_val:.2f}'),
                 '主要產品':       supply_eng.get_product_description(r.ticker),
                 '籌碼分':         round(r.chip_score, 2),
                 '法人連續買超天數': r.details.get('chip', {}).get('trust_streak', 0),
-                '目標價':         target_p,
+                '目標價':         target_p if target_p > 0 else 'ATR追蹤',
                 '操作建議':       action,
             })
     logger.info(f"  報表已輸出至: {results_csv}")
@@ -573,7 +588,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
         logger.info("  本次掃描未找到符合條件的標的。")
 
     # 診斷 CSV（不論有無通過標的都輸出）
-    _save_diag_csv(all_scan_results, diag_csv)
+    _save_diag_csv(all_scan_results, diag_csv, sector_eng, supply_eng)
 
     a_count = sum(1 for r in score_results if r.opportunity_grade == 'A')
     b_count = sum(1 for r in score_results if r.opportunity_grade == 'B')
@@ -584,7 +599,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     )
 
     # Step 8: 持倉監控
-    _run_position_monitor(fetcher, valid_data, target_date, date_str)
+    _run_position_monitor(fetcher, valid_data, target_date, date_str, sector_eng, supply_eng)
 
     fetcher.close()
     return score_results
