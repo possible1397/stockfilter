@@ -52,7 +52,7 @@ def _render_converging(df: pd.DataFrame) -> None:
         st.info("目前無收斂中標的")
         return
 
-    cols = [c for c in ["股票代號", "產業別", "進場總分", "收盤價", "ATR", "操作建議", "主要產品"] if c in converging.columns]
+    cols = [c for c in ["股票代號", "產業別", "進場總分", "收盤價", "ATR", "操作建議", "主要產品", "注意"] if c in converging.columns]
     if "進場總分" in converging.columns:
         converging = converging.sort_values("進場總分", ascending=False)
 

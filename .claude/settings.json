@@ -9,7 +9,23 @@
       "Bash(venv/Scripts/python.exe main.py)",
       "Bash(grep -oE '^\\\\s*\"\"\"\"[^_][^\"\"\"\"]*\"\"\"\":\\\\s*\\\\{$' data/supply_chain_data.json)",
       "Bash(venv/Scripts/python.exe scripts/update_supply_chain.py)",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "WebFetch(domain:www.cnyes.com)",
+      "WebFetch(domain:www.wantgoo.com)",
+      "WebFetch(domain:goodinfo.tw)",
+      "WebFetch(domain:statementdog.com)",
+      "WebFetch(domain:www.moneydj.com)",
+      "WebFetch(domain:www.xq.com.tw)",
+      "WebFetch(domain:api.cnyes.com)",
+      "WebFetch(domain:finmindtrade.com)",
+      "WebFetch(domain:openapi.twse.com.tw)",
+      "WebFetch(domain:www.cmoney.tw)",
+      "WebFetch(domain:api.cmoney.tw)",
+      "WebFetch(domain:concords.moneydj.com)",
+      "WebFetch(domain:finmind.github.io)",
+      "WebFetch(domain:api.finmindtrade.com)",
+      "WebFetch(domain:cnyes.com)",
+      "WebFetch(domain:tw.stock.yahoo.com)"
     ]
   }
 }

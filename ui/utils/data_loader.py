@@ -154,6 +154,21 @@ def list_chart_pngs() -> dict[str, str]:
     return result
 
 
+def load_market_snapshot(scan_date: str | None = None) -> pd.DataFrame:
+    """Return full-market snapshot CSV (all valid stocks, pre-VCP-filter) for heatmap."""
+    if scan_date:
+        path = os.path.join(OUTPUT_DIR, f"market_{scan_date.replace('-', '')}.csv")
+        if not os.path.exists(path):
+            path = _latest_file("market_*.csv")
+    else:
+        path = _latest_file("market_*.csv")
+    if path is None:
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    df.columns = df.columns.str.strip()
+    return df
+
+
 def list_available_dates() -> list[str]:
     """Return all available scan dates from output directory."""
     files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "scanner_*.csv")))

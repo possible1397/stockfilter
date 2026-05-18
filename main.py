@@ -67,6 +67,7 @@ MARKET_SCORE_THRESHOLD = _scanner.get("market_score_threshold", 40)
 TOP_SECTOR_COUNT       = _scanner.get("top_sector_count", 10)
 DOWNLOAD_WORKERS       = _scanner.get("download_workers", 8)
 CHART_CLEANUP_DAYS     = _scanner.get("chart_cleanup_days", 14)
+MIN_CHIP_SCORE         = _scanner.get("min_chip_score", 20)
 
 # 樣本模式
 SAMPLE_TICKERS = [
@@ -240,7 +241,7 @@ def _save_diag_csv(all_results, path, sector_eng=None, supply_eng=None):
         w = _csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for r in rows:
-            sector_name = sector_eng.get_sector(r.ticker) if sector_eng else ""
+            sector_name = "/".join(sector_eng.get_all_sectors(r.ticker)) if sector_eng else ""
             product_desc = supply_eng.get_product_description(r.ticker) if supply_eng else ""
             w.writerow({
                 'watchlist_score':   _calc_watchlist_score(r),
@@ -299,7 +300,7 @@ def _run_position_monitor(fetcher, valid_data: dict, target_date, date_str: str,
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for adv in advices:
-            sector_name = sector_eng.get_sector(adv.ticker) if sector_eng else ""
+            sector_name = "/".join(sector_eng.get_all_sectors(adv.ticker)) if sector_eng else ""
             product_desc = supply_eng.get_product_description(adv.ticker) if supply_eng else ""
             writer.writerow({
                 '股票代號':     adv.ticker,
@@ -327,6 +328,34 @@ def _run_position_monitor(fetcher, valid_data: dict, target_date, date_str: str,
         logger.info("")
 
     logger.info(f"  持倉報表已輸出至: {pos_csv}")
+
+def _save_market_snapshot(valid_data: dict, sector_eng, path: str) -> None:
+    from data.stock_list import get_stock_name
+    rows = []
+    for ticker, df in valid_data.items():
+        if df is None or len(df) < 2:
+            continue
+        try:
+            close = float(df["Close"].iloc[-1])
+            prev_close = float(df["Close"].iloc[-2])
+            volume = float(df["Volume"].iloc[-1])
+            chg_pct = round((close / prev_close - 1) * 100, 2)
+            turnover = int(volume * close)
+            sector = "/".join(sector_eng.get_all_sectors(ticker))
+            rows.append({
+                "股票代號": ticker,
+                "名稱": get_stock_name(ticker),
+                "產業別": sector,
+                "收盤價": round(close, 2),
+                "漲跌幅": chg_pct,
+                "成交金額": turnover,
+            })
+        except Exception:
+            continue
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig")
+    logger.info(f"  市場快照已輸出: {path} ({len(rows)} 檔)")
+
 
 def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     if target_date is None:
@@ -412,6 +441,10 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
 
     valid_data = cleaner.filter_batch(sliced_data)
     valid_tickers = list(valid_data.keys())
+
+    # 輸出全市場快照供熱力圖使用 (在 VCP 篩選前，保留全部有效股票)
+    market_csv = os.path.join(OUTPUT_DIR, f"market_{file_suffix}.csv")
+    _save_market_snapshot(valid_data, sector_eng, market_csv)
 
     # ============================================================
     # Step 3: 全市場型態掃描 (不過濾族群！ — 反轉邏輯的核心)
@@ -523,11 +556,15 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
         atr_val = calculate_atr(df_ticker)
         _, stop_p, target_p, _ = _build_action_plan(result, atr_val, CFG)
         bk_tag = " [突破]" if result.is_breakout else ""
+        # 雙重弱點警示：族群非強勢 (sector floor=30) 且籌碼偏低
+        weak_tag = ""
+        if s_score <= 30.0 and chip_score_val < MIN_CHIP_SCORE:
+            weak_tag = " ⚠低籌碼且無族群動能"
         logger.info(
             f"  [{grade}] {result.ticker:8} | 總分: {final_res.total_score:5.1f} | "
             f"型態: {p_score:4.1f} | 密度: {d_score:4.1f} | "
             f"鏈: {c_score:4.1f} | 籌: {chip_score_val:4.1f} | 收斂: {result.convergence_ratio:5.1%} | "
-            f"停損:{stop_p} 目標:{target_p}{bk_tag}"
+            f"停損:{stop_p} 目標:{target_p}{bk_tag}{weak_tag}"
         )
 
         score_results.append(final_res)
@@ -544,8 +581,8 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     with open(results_csv, 'w', newline='', encoding='utf-8-sig') as f:
         fieldnames = [
             '族群等級', '股票代號', '產業別', '狀態',
-            '進場總分', '收盤價', '進場後停損', 'ATR',
-            '主要產品', '籌碼分', '法人連續買超天數', '目標價', '操作建議',
+            '進場總分', '收盤價', '漲跌幅', '成交金額', '進場後停損', 'ATR',
+            '主要產品', '籌碼分', '法人連續買超天數', '目標價', '操作建議', '注意',
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -553,8 +590,17 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
             pattern_detail = r.details.get('pattern')
             status = "突破進場" if r.breakout_score > 0 else "收斂觀察"
 
+            df_ticker = valid_data.get(r.ticker, pd.DataFrame())
+            change_pct = 0.0
+            turnover = 0.0
+            if not df_ticker.empty and len(df_ticker) >= 2:
+                c1 = df_ticker['Close'].iloc[-1]
+                c0 = df_ticker['Close'].iloc[-2]
+                v1 = df_ticker['Volume'].iloc[-1]
+                change_pct = (c1 - c0) / c0 * 100
+                turnover = c1 * v1
+
             if pattern_detail:
-                df_ticker = valid_data.get(r.ticker, pd.DataFrame())
                 atr_val = calculate_atr(df_ticker)
                 entry_ref, stop_p, target_p, action = _build_action_plan(
                     pattern_detail, atr_val, CFG)
@@ -563,13 +609,19 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
                 atr_val, stop_p, target_p, action = 0, 0, 0, ""
                 current_p = 0
 
+            # 雙重弱點警示：族群未進榜且籌碼偏低
+            s_score_r = r.sector_score
+            warn_note = "低籌碼且無族群動能" if (s_score_r <= 30.0 and r.chip_score < MIN_CHIP_SCORE) else ""
+
             writer.writerow({
                 '族群等級':       r.opportunity_grade,
                 '股票代號':       r.ticker,
-                '產業別':         r.details.get('sector', ''),
+                '產業別':         "/".join(sector_eng.get_all_sectors(r.ticker)),
                 '狀態':           status,
                 '進場總分':       round(r.total_score, 2),
                 '收盤價':         round(current_p, 2),
+                '漲跌幅':         round(change_pct, 2),
+                '成交金額':       round(turnover, 0),
                 '進場後停損':      stop_p,
                 'ATR':            float(f'{atr_val:.2f}'),
                 '主要產品':       supply_eng.get_product_description(r.ticker),
@@ -577,6 +629,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
                 '法人連續買超天數': r.details.get('chip', {}).get('trust_streak', 0),
                 '目標價':         target_p if target_p > 0 else 'ATR追蹤',
                 '操作建議':       action,
+                '注意':           warn_note,
             })
     logger.info(f"  報表已輸出至: {results_csv}")
 

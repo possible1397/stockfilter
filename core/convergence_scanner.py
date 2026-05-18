@@ -67,57 +67,52 @@ class ConvergenceScanner:
     def calculate_sector_density(self, converging_results: list,
                                  all_valid_tickers: list) -> list[SectorDensity]:
         """
-        計算各族群的三角收斂密度
-        
-        converging_results: PatternRecognizer.analyze() 回傳 is_converging=True 的 TriangleResult 列表
-        all_valid_tickers: 通過 DataCleaner 的所有合格 ticker 列表
-        
-        回傳: 按密度排序的 SectorDensity 列表
+        計算各標籤（主要產業 + 主題族群）的收斂密度
         """
         if not self.sector_engine:
             return []
 
-        # 統計各族群的總股數
-        sector_total = {}
+        # 1. 統計各標籤的總股數 (樣本空間)
+        label_total = {}
         for ticker in all_valid_tickers:
-            sector = self.sector_engine.get_sector(ticker)
-            if sector == "未知":
-                continue
-            sector_total[sector] = sector_total.get(sector, 0) + 1
+            labels = self.sector_engine.get_all_sectors(ticker)
+            for label in labels:
+                if label == "未知": continue
+                label_total[label] = label_total.get(label, 0) + 1
 
-        # 統計各族群的收斂/突破股數
-        sector_converging = {}     # {sector: [ticker, ...]}
-        sector_breakout = {}       # {sector: [ticker, ...]}
+        # 2. 統計各標籤的收斂與突破股數
+        label_converging = {}
+        label_breakout = {}
         
         for result in converging_results:
-            sector = self.sector_engine.get_sector(result.ticker)
-            if sector == "未知":
-                continue
-            
-            if sector not in sector_converging:
-                sector_converging[sector] = []
-                sector_breakout[sector] = []
-            
-            sector_converging[sector].append(result.ticker)
-            if result.is_breakout:
-                sector_breakout[sector].append(result.ticker)
+            labels = self.sector_engine.get_all_sectors(result.ticker)
+            for label in labels:
+                if label == "未知": continue
+                
+                if label not in label_converging:
+                    label_converging[label] = []
+                    label_breakout[label] = []
+                
+                label_converging[label].append(result.ticker)
+                if result.is_breakout:
+                    label_breakout[label].append(result.ticker)
 
-        # 建立 SectorDensity 結果
+        # 3. 建立 SectorDensity 結果
         densities = []
-        for sector, conv_tickers in sector_converging.items():
-            total = sector_total.get(sector, 1)
+        for label, conv_tickers in label_converging.items():
+            total = label_total.get(label, 1)
             density = len(conv_tickers) / total if total > 0 else 0
             
             densities.append(SectorDensity(
-                sector=sector,
+                sector=label,
                 density=round(density, 4),
                 converging_count=len(conv_tickers),
                 total_count=total,
                 converging_tickers=conv_tickers,
-                breakout_tickers=sector_breakout.get(sector, []),
+                breakout_tickers=label_breakout.get(label, []),
             ))
 
-        # 標準化分數 (0-100)
+        # 4. 標準化分數 (0-100)
         if densities:
             max_density = max(d.density for d in densities) or 1
             for d in densities:
@@ -129,87 +124,89 @@ class ConvergenceScanner:
 
     def classify_opportunities(self, converging_results: list,
                                sector_densities: list[SectorDensity],
-                               price_data: dict) -> list[OpportunityResult]:
+                               price_data: dict,
+                               top_sectors_df=None) -> list[OpportunityResult]:
         """
-        對每個收斂標的進行 A/B/C 機會分級
-        
-        A 級: 族群密度 ≥ 門檻 + 族群內有領頭股已突破
-        B 級: 族群密度 ≥ 門檻 + 無突破 (持續監控)
-        C 級: 族群密度低 / 族群收斂標的少 (風險較高)
+        對每個收斂標的進行 A/B/C 機會分級 (支持多重標籤)
         """
-        # 建立 sector → SectorDensity 對照
+        # 建立 label → SectorDensity 對照
         density_map = {sd.sector: sd for sd in sector_densities}
+        hot_sector_set = set(top_sectors_df['sector'].tolist()) if top_sectors_df is not None and not top_sectors_df.empty else set()
 
         opportunities = []
         for result in converging_results:
-            sector = (self.sector_engine.get_sector(result.ticker)
-                      if self.sector_engine else "未知")
-            sd = density_map.get(sector)
+            all_labels = self.sector_engine.get_all_sectors(result.ticker) if self.sector_engine else ["未知"]
+            
+            # 在所有標籤中找出「最優」的密度與領頭狀態
+            best_density_score = 0.0
+            is_any_high_density = False
+            has_any_leader = False
+            is_any_hot = False
+            
+            best_sd = None
+            all_leaders = []
+            all_peers = set()
 
-            # 供應鏈資訊
+            for label in all_labels:
+                if label == "未知": continue
+                sd = density_map.get(label)
+                if not sd: continue
+                
+                # 更新最佳密度分
+                if sd.density_score > best_density_score:
+                    best_density_score = sd.density_score
+                    best_sd = sd
+                
+                # 檢查是否達標
+                if sd.density >= self.DENSITY_HIGH_THRESHOLD and sd.converging_count >= self.MIN_CONVERGING_COUNT:
+                    is_any_high_density = True
+                
+                if sd.breakout_tickers:
+                    has_any_leader = True
+                    all_leaders.extend([{'ticker': t, 'source': f'{label}突破'} for t in sd.breakout_tickers if t != result.ticker])
+                
+                if label in hot_sector_set:
+                    is_any_hot = True
+                
+                all_peers.update([t for t in sd.converging_tickers if t != result.ticker])
+
+            # 供應鏈資訊 (額外加分)
             chain_position = None
-            chain_leaders = []
-            has_chain_leader = False
             if self.supply_chain:
                 chain_position = self.supply_chain.get_position(result.ticker)
-                leader_info = self.supply_chain.detect_chain_leaders(
-                    result.ticker, price_data)
-                chain_leaders = leader_info.get('leaders', [])
-                has_chain_leader = leader_info.get('has_leader', False)
-
-            # 判斷密度是否足夠
-            high_density = (sd and
-                            sd.density >= self.DENSITY_HIGH_THRESHOLD and
-                            sd.converging_count >= self.MIN_CONVERGING_COUNT)
-
-            # 是否有領頭股 (族群內突破 或 供應鏈上游領漲)
-            has_leader = bool(sd and sd.breakout_tickers) or has_chain_leader
-            leader_list = []
-            if sd and sd.breakout_tickers:
-                leader_list.extend([{'ticker': t, 'source': '族群突破'}
-                                     for t in sd.breakout_tickers
-                                     if t != result.ticker])
-            if chain_leaders:
-                leader_list.extend([{'ticker': l['ticker'],
-                                      'source': f"供應鏈{l['level']}",
-                                      'return_5d': l['return_5d']}
-                                     for l in chain_leaders[:3]])
+                leader_info = self.supply_chain.detect_chain_leaders(result.ticker, price_data)
+                if leader_info.get('has_leader'):
+                    has_any_leader = True
+                    all_leaders.extend([{'ticker': l['ticker'], 'source': f"供應鏈{l['level']}"} for l in leader_info.get('leaders', [])[:2]])
 
             # A/B/C 分級
-            if high_density and has_leader:
+            if is_any_high_density and has_any_leader and is_any_hot:
                 grade = 'A'
-                peer_list = [t for t in sd.converging_tickers if t != result.ticker] if sd else []
-                peer_str = f" 同業收斂: {', '.join(peer_list[:3])}等" if peer_list else ""
-                reason = (f"族群收斂密度 {sd.density:.1%} (高) + "
-                          f"有 {len(leader_list)} 檔領頭股。{peer_str}")
-            elif high_density:
+                reason = f"族群/主題具高收斂密度 ({best_sd.density if best_sd else 0:.1%}) + 有領頭股突破 + 族群動能強勢。"
+            elif is_any_high_density and has_any_leader:
                 grade = 'B'
-                peer_list = [t for t in sd.converging_tickers if t != result.ticker] if sd else []
-                peer_str = f" 同業收斂: {', '.join(peer_list[:3])}等{len(peer_list)}家" if peer_list else ""
-                reason = f"族群收斂密度 {sd.density:.1%} (高)，但尚無突破確認。{peer_str}"
+                reason = f"高密度且有領頭股，但族群動能尚不明顯。"
+            elif is_any_high_density:
+                grade = 'B'
+                reason = f"族群/主題高密度收斂，但尚無明確突破確認。"
             else:
                 grade = 'C'
-                density_str = f"{sd.density:.1%}" if sd else "無資料"
-                peer_list = [t for t in sd.converging_tickers if t != result.ticker] if sd else []
-                peer_str = f" 同業收斂: {', '.join(peer_list)}" if peer_list else ""
-                reason = f"族群收斂密度 {density_str} (低)，單獨收斂風險較高。{peer_str}"
+                reason = f"單獨收斂或族群密度低 ({best_sd.density if best_sd else 0:.1%})，風險較高。"
 
             opportunities.append(OpportunityResult(
                 ticker=result.ticker,
                 grade=grade,
-                sector=sector,
-                density_score=sd.density_score if sd else 0,
-                has_leader=has_leader,
-                leaders=leader_list,
+                sector="/".join(all_labels),
+                density_score=best_density_score,
+                has_leader=has_any_leader,
+                leaders=all_leaders,
                 chain_position=chain_position,
                 reason=reason,
-                converging_peers=peer_list,
+                converging_peers=list(all_peers),
             ))
 
-        # 按分級排序: A > B > C，同級別按 density_score 排序
         grade_order = {'A': 0, 'B': 1, 'C': 2}
-        opportunities.sort(key=lambda x: (grade_order.get(x.grade, 9),
-                                          -x.density_score))
+        opportunities.sort(key=lambda x: (grade_order.get(x.grade, 9), -x.density_score))
         return opportunities
 
     def print_density_report(self, sector_densities: list):

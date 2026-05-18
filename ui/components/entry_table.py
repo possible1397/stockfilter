@@ -33,8 +33,8 @@ def render(df: pd.DataFrame, chart_pngs: dict[str, str]) -> None:
 
     display_cols = [c for c in [
         "族群等級", "股票代號", "產業別", "狀態",
-        "進場總分", "收盤價", "停損價", "目標價",
-        "籌碼分", "法人連續買超天數", "主要產品", "操作建議"
+        "進場總分", "收盤價", "進場後停損", "目標價",
+        "籌碼分", "法人連續買超天數", "主要產品", "操作建議", "注意"
     ] if c in entry_df.columns]
 
     styled = entry_df[display_cols].style.apply(_style_row, axis=1)

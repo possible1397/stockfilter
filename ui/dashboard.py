@@ -15,6 +15,7 @@ from ui.utils.data_loader import (
     latest_market_score, list_chart_pngs,
     load_positions_report, load_positions_config,
     load_app_config, list_available_dates,
+    load_market_snapshot,
 )
 from ui.components import (
     market_banner, entry_table, watchlist,
@@ -291,6 +292,7 @@ with st.sidebar:
 # ── Load Data ────────────────────────────────────────────────────────────────
 scanner_df = load_scanner(scan_date)
 diag_df = load_diag(scan_date)
+market_snapshot_df = load_market_snapshot(scan_date)
 scan_date_str = latest_scan_date() if scan_date is None else scan_date
 market_score = latest_market_score()
 chart_pngs = list_chart_pngs()
@@ -346,7 +348,7 @@ with tab_market:
     st.markdown("---")
 
     # Section 4: Sector Rotation
-    sector_chart.render(scanner_df)
+    sector_chart.render(scanner_df, market_snapshot_df)
 
     st.markdown("---")
 

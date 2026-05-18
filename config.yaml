@@ -5,6 +5,7 @@ scanner:
   force_safe_trade: true          # 是否強制要求大盤環境安全 (市場分數 >= market_score_threshold)
   market_score_threshold: 40      # 大盤安全門檻 (0-100)
   top_sector_count: 10            # 族群分析 Top N
+  min_chip_score: 20              # 籌碼最低門檻 (低於此值且族群未進榜時輸出警示)
   download_workers: 8             # 批次下載執行緒數
   db_path: stock_data.db          # SQLite 資料庫路徑
   output_dir: output              # 報表與圖表輸出目錄

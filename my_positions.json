@@ -1,12 +1,22 @@
 [
   {
-    "ticker": "1717.TW",
-    "entry_date": "2026-04-08",
-    "entry_price": 67.1,
+    "ticker": "2338.TW",
+    "entry_date": "2026-05-05",
+    "entry_price": 50.48,
     "shares": 2,
-    "remaining_ratio": 0.5,
-    "partial_exit_date": "2026-04-13",
-    "partial_exit_price": 80.7,
-    "note": "長興化工，4/13已減碼1張"
+    "remaining_ratio": 1.0,
+    "partial_exit_date": "",
+    "partial_exit_price": 0,
+    "note": "光罩"
+  },
+  {
+    "ticker": "8112.TW",
+    "entry_date": "2026-05-08",
+    "entry_price": 87.3,
+    "shares": 2,
+    "remaining_ratio": 1.0,
+    "partial_exit_date": "",
+    "partial_exit_price": 0,
+    "note": "至上 (分批買入)"
   }
 ]
