@@ -1,3 +1,4 @@
+"""data/database.py — SQLite 存取層"""
 import sqlite3
 import pandas as pd
 import os
@@ -83,15 +84,42 @@ def init_db(db_path: str = DB_PATH):
                 ON scan_results (scan_date);
             CREATE INDEX IF NOT EXISTS idx_scan_results_ticker
                 ON scan_results (ticker);
+
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                status TEXT NOT NULL,
+                buy_date TEXT NOT NULL,
+                buy_price REAL NOT NULL,
+                buy_reason TEXT,
+                shares INTEGER NOT NULL,
+                remaining_ratio REAL DEFAULT 1.0,
+                partial_sell_date TEXT,
+                partial_sell_price REAL,
+                sell_date TEXT,
+                sell_price REAL,
+                sell_reason TEXT,
+                highest_price REAL,
+                stop_loss REAL,
+                take_profit REAL,
+                pnl_pct REAL,
+                notes TEXT
+            );
         ''')
     logger.debug(f"SQLite DB 已初始化: {db_path}")
 
 
-def save_dataframe(ticker: str, df: pd.DataFrame, db_path: str = DB_PATH):
+def save_dataframe(ticker: str, df: pd.DataFrame, db_path: str = DB_PATH,
+                   replace: bool = False):
     """
     將 yfinance 回傳的 DataFrame 寫入 SQLite
-    使用 INSERT OR IGNORE：已存在的日期不覆蓋，確保歷史價格穩定一致
-    （避免 yfinance 調整價格造成 pivot point 飄移、掃描結果每次不同）
+
+    replace=False (預設): INSERT OR IGNORE，已存在的日期不覆蓋，
+      確保同一天重複執行時掃描結果穩定。
+    replace=True: INSERT OR REPLACE，用於「偵測到除權息/分割調整」後的
+      全量重抓 — yfinance 的還原股價在每次配息後整條序列都會改變，
+      若永不更新舊 K 線，新舊調整基準混雜會在序列上留下假跳空，
+      汙染 pivot 與突破判斷。
     """
     if df is None or df.empty:
         return
@@ -121,7 +149,8 @@ def save_dataframe(ticker: str, df: pd.DataFrame, db_path: str = DB_PATH):
         with get_connection(db_path) as conn:
             placeholders = ', '.join('?' * len(cols))
             col_names    = ', '.join(cols)
-            sql = f"INSERT OR IGNORE INTO daily_prices ({col_names}) VALUES ({placeholders})"
+            verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
+            sql = f"{verb} INTO daily_prices ({col_names}) VALUES ({placeholders})"
             rows = [tuple(row) for row in df[cols].itertuples(index=False)]
             conn.executemany(sql, rows)
     except Exception as e:
@@ -324,6 +353,54 @@ def load_precomputed_results(db_path: str, start_date: str, end_date: str) -> di
         logger.error(f"讀取 precomputed_results 失敗: {e}")
         return {}
 
+
+def get_open_paper_trades(db_path: str = DB_PATH) -> list:
+    """取得所有 status='OPEN' 的紙上交易紀錄，回傳 dict 列表"""
+    for attempt in (1, 2):
+        try:
+            with get_connection(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("SELECT * FROM paper_trades WHERE status = 'OPEN'")
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.OperationalError as e:
+            # 舊資料庫尚未建立 paper_trades 表時自動補建，只重試一次
+            if attempt == 1 and "no such table" in str(e):
+                logger.info("paper_trades 表不存在，自動初始化資料庫...")
+                init_db(db_path)
+                continue
+            logger.error(f"讀取 open paper_trades 失敗: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"讀取 open paper_trades 失敗: {e}")
+            return []
+    return []
+
+def upsert_paper_trade(trade: dict, db_path: str = DB_PATH) -> int:
+    """
+    新增或更新紙上交易。若 trade dict 中有 'id' 則為更新，無則新增。
+    回傳該筆資料的 id。
+    """
+    try:
+        with get_connection(db_path) as conn:
+            if 'id' in trade and trade['id']:
+                # Update
+                set_clause = ', '.join([f"{k}=?" for k in trade.keys() if k != 'id'])
+                values = [trade[k] for k in trade.keys() if k != 'id'] + [trade['id']]
+                sql = f"UPDATE paper_trades SET {set_clause} WHERE id=?"
+                conn.execute(sql, values)
+                return trade['id']
+            else:
+                # Insert
+                keys = list(trade.keys())
+                placeholders = ', '.join(['?'] * len(keys))
+                col_names = ', '.join(keys)
+                values = [trade[k] for k in keys]
+                sql = f"INSERT INTO paper_trades ({col_names}) VALUES ({placeholders})"
+                cursor = conn.execute(sql, values)
+                return cursor.lastrowid
+    except Exception as e:
+        logger.error(f"寫入 paper_trade 失敗: {e}")
+        return -1
 
 # ===== 測試區塊 =====
 if __name__ == "__main__":

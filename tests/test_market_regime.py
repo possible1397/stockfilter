@@ -1,4 +1,4 @@
-"""tests/test_market_regime.py — MarketRegimeDetector 單元測試 (mock yfinance)"""
+"""tests/test_market_regime.py — MarketRegimeDetector 單元測試 (mock yfinance, use_db_cache=False 隔離真實 DB)"""
 import numpy as np
 import pandas as pd
 import pytest
@@ -25,7 +25,7 @@ def _make_index_df(bars: int = 130, trend: str = "bull") -> pd.DataFrame:
 class TestMarketRegimeDetector:
     def test_get_market_score_returns_float(self):
         """測試 get_market_score 回傳浮點數"""
-        detector = MarketRegimeDetector()
+        detector = MarketRegimeDetector(use_db_cache=False)  # 隔離真實 DB，只走 mock
         bull_tse = _make_index_df(trend="bull")
         bull_otc = _make_index_df(trend="bull")
 
@@ -38,7 +38,7 @@ class TestMarketRegimeDetector:
 
     def test_bull_market_high_score(self):
         """多頭市場分數應 > 50"""
-        detector = MarketRegimeDetector()
+        detector = MarketRegimeDetector(use_db_cache=False)  # 隔離真實 DB，只走 mock
         bull = _make_index_df(bars=130, trend="bull")
 
         with patch("yfinance.download", return_value=bull):
@@ -48,7 +48,7 @@ class TestMarketRegimeDetector:
 
     def test_bear_market_low_score(self):
         """空頭市場分數應 < 50"""
-        detector = MarketRegimeDetector()
+        detector = MarketRegimeDetector(use_db_cache=False)  # 隔離真實 DB，只走 mock
         bear = _make_index_df(bars=130, trend="bear")
 
         with patch("yfinance.download", return_value=bear):
@@ -58,7 +58,7 @@ class TestMarketRegimeDetector:
 
     def test_ttl_cache_avoids_second_download(self):
         """同一小時內的第二次呼叫應使用快取，不重新下載"""
-        detector = MarketRegimeDetector()
+        detector = MarketRegimeDetector(use_db_cache=False)  # 隔離真實 DB，只走 mock
         bull = _make_index_df(trend="bull")
 
         with patch("yfinance.download", return_value=bull) as mock_dl:
@@ -69,7 +69,7 @@ class TestMarketRegimeDetector:
 
     def test_empty_response_handled(self):
         """yfinance 回傳空 DataFrame 應回傳分數 0"""
-        detector = MarketRegimeDetector()
+        detector = MarketRegimeDetector(use_db_cache=False)  # 隔離真實 DB，只走 mock
         with patch("yfinance.download", return_value=pd.DataFrame()):
             detector._cache = None
             status = detector.get_market_status()
@@ -79,7 +79,7 @@ class TestMarketRegimeDetector:
     def test_is_safe_to_trade_threshold(self):
         """測試 is_safe_to_trade 門檻判斷 (直接注入快取)"""
         from datetime import datetime as _dt
-        detector = MarketRegimeDetector()
+        detector = MarketRegimeDetector(use_db_cache=False)  # 隔離真實 DB，只走 mock
         # 注入快取，讓 get_market_status() 直接命中快取
         current_hour = _dt.now().hour
         detector._cache = {"TSE": {"score": 60}, "OTC": {"score": 60}}

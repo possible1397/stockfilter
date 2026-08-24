@@ -1,5 +1,5 @@
 """
-大盤環境濾網模組 (Market Regime Detector)
+大盤環境濾網模組 (Market Regime Detector) — 評分邏輯共用 utils/regime.py
 功能:
   - 抓取加權指數 (^TWII) 與櫃買指數 (^TWOII) 資料
   - 判斷大盤是否站上 20MA (月線) / 60MA (季線)
@@ -11,16 +11,22 @@ from datetime import datetime
 from typing import Optional
 
 from utils.logger import get_logger
+from utils.regime import regime_score_from_closes
 
 logger = get_logger(__name__)
 
 
 class MarketRegimeDetector:
-    def __init__(self):
+    def __init__(self, use_db_cache: bool = True):
+        """
+        use_db_cache: 是否優先從 SQLite 讀取指數資料。
+          測試時設 False 可完全隔離 (只走 mock 的 yfinance)。
+        """
         self.indices = {
             'TSE': '^TWII',
             'OTC': '^TWOII'
         }
+        self.use_db_cache = use_db_cache
         # TTL 快取：同一小時內不重複下載
         self._cache: Optional[dict] = None
         self._cache_hour: Optional[int] = None
@@ -40,11 +46,13 @@ class MarketRegimeDetector:
             try:
                 # 優先從資料庫抓取指數 (如果有)，否則從 yf 下載
                 import data.database as db_module
-                df = db_module.load_dataframe(ticker)
-                
+                df = pd.DataFrame()
+                if self.use_db_cache:
+                    df = db_module.load_dataframe(ticker)
+
                 if df.empty or (end_date and df.index.max() < pd.to_datetime(end_date)):
                     df = yf.download(ticker, period="1y", progress=False)
-                    if not df.empty:
+                    if not df.empty and self.use_db_cache:
                         db_module.save_dataframe(ticker, df)
 
                 if df.empty:
@@ -58,49 +66,29 @@ class MarketRegimeDetector:
                         results[name] = {"status": "NoData", "score": 0}
                         continue
 
-                closes = df['Close'].values.flatten()
-                close = float(closes[-1])
+                # 評分邏輯統一使用 utils.regime (與回測/預計算共用同一實作)
+                closes = df['Close'].squeeze()
+                if isinstance(closes, pd.DataFrame):
+                    closes = closes.iloc[:, 0]
+                score, d = regime_score_from_closes(closes)
 
-                all_ma20 = df['Close'].rolling(window=20).mean().values.flatten()
-                all_ma60 = df['Close'].rolling(window=60).mean().values.flatten()
-                ma20 = float(all_ma20[-1])
-                ma60 = float(all_ma60[-1])
-
-                # 維度 1: MA 位置分 (0~40)
-                dist_ma20 = (close - ma20) / ma20 * 100
-                dist_ma60 = (close - ma60) / ma60 * 100
-                pos_score_20 = max(0, min(20, 10 + dist_ma20 * 2))
-                pos_score_60 = max(0, min(20, 10 + dist_ma60 * 2))
-                position_score = pos_score_20 + pos_score_60
-
-                # 維度 2: MA20 斜率分 (0~30)
-                if len(all_ma20) >= 6:
-                    ma20_5d_ago = float(all_ma20[-6])
-                    ma20_slope_pct = (ma20 - ma20_5d_ago) / ma20_5d_ago * 100
-                    slope_score = max(0, min(30, 15 + ma20_slope_pct * 10))
-                else:
-                    slope_score = 15.0
-
-                # 維度 3: 短期動能分 (0~30)
-                if len(closes) >= 6:
-                    ret_5d = (close - float(closes[-6])) / float(closes[-6]) * 100
-                    momentum_score = max(0, min(30, 15 + ret_5d * 3))
-                else:
-                    momentum_score = 15.0
-
-                score = round(position_score + slope_score + momentum_score, 1)
+                if not d:
+                    # 資料不足 60 筆 → 中性分數
+                    results[name] = {"status": "InsufficientData",
+                                     "score": round(score, 1)}
+                    continue
 
                 results[name] = {
-                    "price": round(float(close), 2),
-                    "ma20": round(float(ma20), 2),
-                    "ma60": round(float(ma60), 2),
-                    "is_above_ma20": bool(close > ma20),
-                    "is_above_ma60": bool(close > ma60),
-                    "score": score,
+                    "price": d["close"],
+                    "ma20": d["ma20"],
+                    "ma60": d["ma60"],
+                    "is_above_ma20": bool(d["close"] > d["ma20"]),
+                    "is_above_ma60": bool(d["close"] > d["ma60"]),
+                    "score": round(score, 1),
                     "detail": {
-                        "position": round(position_score, 1),
-                        "slope": round(slope_score, 1),
-                        "momentum": round(momentum_score, 1),
+                        "position": d["position"],
+                        "slope": d["slope"],
+                        "momentum": d["momentum"],
                     }
                 }
             except Exception as e:

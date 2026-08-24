@@ -37,7 +37,9 @@ class BacktestMetrics:
 
 
 def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
-                      risk_free_rate: float = 0.02) -> BacktestMetrics:
+                      risk_free_rate: float = 0.02,
+                      position_size: float = 1.0,
+                      daily_equity: list = None) -> BacktestMetrics:
     """
     從交易記錄計算所有績效指標
 
@@ -46,6 +48,15 @@ def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
       - entry_price, exit_price
       - return_pct (含手續費扣除後的淨報酬率 %)
       - hold_days
+      - position_ratio (選填，分批平倉時該筆佔原始倉位的比例，預設 1.0)
+
+    position_size: 每筆倉位佔總資金的比例 (例如 0.2 = 20%)。
+      修正: 舊版將每筆 return_pct 全額複利，等於假設每筆 all-in，
+      總報酬 / MDD 被放大約 1/position_size 倍。
+
+    daily_equity: 選填，[(date_str, equity_pct), ...] 逐日投資組合淨值 (100 = 起始)。
+      提供時，總報酬 / 年化 / MDD / Sharpe / 逐年報酬改用日淨值計算 (最準確)；
+      未提供時退回「逐筆貢獻複利」近似。
     """
     metrics = BacktestMetrics()
 
@@ -84,13 +95,18 @@ def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
     total_loss = abs(sum(losses)) if losses else 1
     metrics.profit_factor = total_profit / total_loss if total_loss > 0 else 0.0
 
-    # 權益曲線 (按出場日期時序累計)
+    # 權益曲線 — 投資組合層級 (每筆貢獻 = return_pct × 倉位佔比 × 分批比例)
     sorted_trades = sorted(trades, key=lambda t: t.get('exit_date', ''))
-    equity = initial_capital
-    equity_curve = [equity]
-    for t in sorted_trades:
-        equity *= (1 + t['return_pct'] / 100)
-        equity_curve.append(equity)
+    if daily_equity:
+        # 使用引擎提供的逐日淨值 (100 = 起始)
+        equity_curve = [initial_capital * eq / 100.0 for _, eq in daily_equity]
+    else:
+        equity = initial_capital
+        equity_curve = [equity]
+        for t in sorted_trades:
+            contrib = (t['return_pct'] / 100) * position_size * t.get('position_ratio', 1.0)
+            equity *= (1 + contrib)
+            equity_curve.append(equity)
     metrics.equity_curve = equity_curve
 
     # 總報酬率
@@ -98,8 +114,12 @@ def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
 
     # 年化報酬率 — 使用日曆天數 (首筆進場 → 末筆出場)，避免平行持倉重複計算
     try:
-        first_entry = min(t.get('entry_date', '2020-01-01') for t in trades)
-        last_exit = max(t.get('exit_date', '2020-01-01') for t in trades)
+        if daily_equity:
+            first_entry = daily_equity[0][0]
+            last_exit = daily_equity[-1][0]
+        else:
+            first_entry = min(t.get('entry_date', '2020-01-01') for t in trades)
+            last_exit = max(t.get('exit_date', '2020-01-01') for t in trades)
         span_days = (datetime.strptime(last_exit, '%Y-%m-%d') -
                      datetime.strptime(first_entry, '%Y-%m-%d')).days
         years = max(span_days / 365.25, 0.01)
@@ -109,7 +129,7 @@ def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
     except Exception:
         pass
 
-    # 最大回撤 (MDD)
+    # 最大回撤 (MDD) — 有日淨值時反映逐日浮動，比只看交易序列準確
     peak = equity_curve[0]
     max_dd = 0.0
     for val in equity_curve:
@@ -125,9 +145,21 @@ def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
         metrics.calmar_ratio = metrics.annualized_return_pct / metrics.max_drawdown_pct
 
     # Sharpe Ratio (年化)
-    if len(returns) > 1:
+    if daily_equity and len(equity_curve) > 2:
+        # 以逐日淨值報酬率計算 (標準做法)
+        eq_arr = np.array(equity_curve, dtype=float)
+        daily_rets = eq_arr[1:] / eq_arr[:-1] - 1.0
         daily_rf = risk_free_rate / 252
-        excess_returns = [r / 100 - daily_rf for r in returns]
+        excess = daily_rets - daily_rf
+        std = float(np.std(excess, ddof=1))
+        if std > 0:
+            metrics.sharpe_ratio = float(np.mean(excess)) / std * np.sqrt(252)
+    elif len(returns) > 1:
+        # 退回逐筆近似 (持倉重疊時會失真，僅供參考)
+        daily_rf = risk_free_rate / 252
+        pf_returns = [r / 100 * position_size * t.get('position_ratio', 1.0)
+                      for r, t in zip(returns, trades)]
+        excess_returns = [r - daily_rf for r in pf_returns]
         mean_excess = float(np.mean(excess_returns))
         std_excess = float(np.std(excess_returns, ddof=1))
         if std_excess > 0:
@@ -149,20 +181,31 @@ def calculate_metrics(trades: list, initial_capital: float = 1_000_000,
             cur_consec = 0
     metrics.max_consecutive_loss = max_consec
 
-    # 逐年報酬分解
-    yearly_buckets: dict = {}
-    for t in sorted_trades:
-        year = t.get('exit_date', '????')[:4]
-        if year not in yearly_buckets:
-            yearly_buckets[year] = []
-        yearly_buckets[year].append(t['return_pct'])
-
+    # 逐年報酬分解 (投資組合層級)
     yearly_returns = {}
-    for year, rets in sorted(yearly_buckets.items()):
-        eq = 1.0
-        for r in rets:
-            eq *= (1 + r / 100)
-        yearly_returns[year] = round((eq - 1) * 100, 1)
+    if daily_equity:
+        # 用日淨值計算各年度報酬 (年初基準 = 上一年度最後一天的淨值)
+        year_last: dict = {}
+        for (d, eq) in daily_equity:
+            year_last[d[:4]] = eq
+        prev = None
+        for year in sorted(year_last.keys()):
+            base = prev if prev is not None else daily_equity[0][1]
+            yearly_returns[year] = round((year_last[year] / base - 1) * 100, 1)
+            prev = year_last[year]
+    else:
+        yearly_buckets: dict = {}
+        for t in sorted_trades:
+            year = t.get('exit_date', '????')[:4]
+            if year not in yearly_buckets:
+                yearly_buckets[year] = []
+            contrib = (t['return_pct'] / 100) * position_size * t.get('position_ratio', 1.0)
+            yearly_buckets[year].append(contrib)
+        for year, rets in sorted(yearly_buckets.items()):
+            eq = 1.0
+            for r in rets:
+                eq *= (1 + r)
+            yearly_returns[year] = round((eq - 1) * 100, 1)
     metrics.yearly_returns = yearly_returns
 
     return metrics

@@ -120,8 +120,11 @@ class ChipAnalyzer:
             
         result['details']['concentration_score'] = min(concentration_score, 30)
         
-        # 各維度滿分加總，動態計算以避免硬寫死除數
-        max_possible = 50 + 30 + 30  # momentum + absorption + concentration
+        # 各維度滿分加總 — 動態分母：大戶持股資料缺失時 (常態，僅部分股票有)
+        # 不把 concentration 的 30 分算入滿分，避免懲罰無資料的股票
+        has_bp_data = ('big_player_1000' in recent_chips.columns
+                       and recent_chips['big_player_1000'].notna().any())
+        max_possible = 50 + 30 + (30 if has_bp_data else 0)
         total_score = (result['details']['momentum_score']
                        + result['details']['absorption_score']
                        + result['details']['concentration_score'])
@@ -143,8 +146,11 @@ class ChipAnalyzer:
             return 0
         # 找出最後一段連續 True 的起始位置
         reversed_positive = positive.iloc[::-1].reset_index(drop=True)
-        first_false = reversed_positive.eq(False).idxmax()
-        # 若全部都是 True，idxmax 回傳 0 但值是 False → 代表沒有 False
-        if not reversed_positive.iloc[first_false]:
+        eq_false = reversed_positive.eq(False)
+        first_false = eq_false.idxmax()
+        # 修正：若序列中完全沒有 False (全期間連買)，idxmax 回傳 0，
+        # 需檢查 eq_false 本身而非 reversed_positive (舊版檢查錯對象，
+        # 導致「全連買」的最強籌碼股 streak 被算成 0)
+        if not bool(eq_false.iloc[first_false]):
             return len(series)
         return int(first_false)

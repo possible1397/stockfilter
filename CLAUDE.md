@@ -38,13 +38,22 @@ Step 2: Data cleaning (volume ≥ 500 lots, bars ≥ 60)
 Step 3: Full-market VCP scan (core/recognizer.py, scipy argrelextrema)
 Step 4: Density aggregation per sector (core/convergence_scanner.py)
 Step 5: A/B/C grading + leader-laggard detection
-Step 6: Composite scoring: Market 15% + Density 25% + Pattern 30% + Breakout 10% + Chain 20%
+Step 6: Composite scoring: Market 10% + Sector 20% + Density 20% + Pattern 15% + Breakout 10% + Chain 5% + Chip 20% (core/scorer.py is the single source of truth)
 Step 7: Output → output/scanner_YYYYMMDD.csv + SQLite scan_results + PNG charts
 ```
 
 ### Key Design Decisions
 
-**SQLite uses `INSERT OR IGNORE`** (not REPLACE) in `data/database.py:save_dataframe()`. yfinance retroactively adjusts prices on each call; overwriting stored K-bars would shift `argrelextrema` pivot points and make the same data produce different signals on different days.
+**SQLite uses `INSERT OR IGNORE` by default, plus adjustment detection** (`data/fetcher.py:_incremental_update()`). yfinance retroactively adjusts prices after each dividend/split. Incremental fetches re-download a 14-day overlap window and compare closes against the cache; if they diverge > 0.5%, the full history is re-fetched with `save_dataframe(replace=True)`. Without this, pre- and post-adjustment bars mix and create phantom gaps that corrupt pivots/breakouts. `_drop_incomplete_today()` also prevents saving today's incomplete bar before 14:00 Taipei time (INSERT OR IGNORE would otherwise freeze the intraday snapshot forever).
+
+**Market regime scoring has a single implementation** in `utils/regime.py`, shared by `MarketRegimeDetector`, `BacktestEngine`, and `precompute_backtest.py`. Do not re-implement it.
+
+**Recognizer slope thresholds are normalized (%/day)** via `max_slope_pct` (config `pattern.max_slope_pct`), not absolute NT$ per day, so selection is price-scale independent.
+
+**Backtest fidelity rules** (`backtest/engine.py` + `scripts/precompute_backtest.py`):
+- Precompute passes the per-day `top_sectors_df` so sector scores and A-grades match the live scanner.
+- Liquidity is checked per-signal-date inside the engine (`min_vol_lots`), never by filtering the universe with latest data (look-ahead).
+- Metrics weight each trade by `position_size × position_ratio` and use the engine's daily equity curve for MDD/Sharpe.
 
 **Supply chain data** (`data/supply_chain_data.json`) has two kinds of entries:
 - Manual chains (12 total): have `上游`/`中游`/`下游` keys with curated tickers
@@ -91,10 +100,10 @@ All parameters live in `config.yaml`. Key defaults:
 ### Entry Conditions (recognizer.py)
 
 A stock qualifies as **converging** when all pass:
-1. Close > SMA50 > SMA200 (uptrend)
+1. Trend filter: ≥200 bars → Close > SMA50 > SMA200; 50–199 bars → Close > SMA50 and SMA50 rising; <50 bars → rejected
 2. 5d avg volume < 50d avg volume × 75% (volume dry-up / VCP)
-3. Linear regression on highs converges downward, lows converges upward
+3. Linear regression on highs converges downward, lows converges upward (slopes normalized to %/day, `max_slope_pct`)
 4. `convergence_ratio` (final_width / initial_width) < 0.3
 5. Pattern spans ≥ 20 bars, ≥ 3 peaks and 3 valleys
 
-**Breakout** additionally requires: Close > resistance AND today's volume > 5d avg × 1.5×.
+**Breakout** additionally requires: Close > resistance AND today's volume > 5d avg × 1.5×. A close above resistance on insufficient volume is *downgraded to converging* (not rejected).

@@ -38,34 +38,7 @@ def _load_config() -> dict:
         return {}
 
 
-def _calculate_regime_score(df: pd.DataFrame, target_ts: pd.Timestamp) -> float:
-    """計算指定日期的市場環境分數 (與 BacktestEngine 同邏輯)"""
-    if df is None or df.empty:
-        return 50.0
-    df_up_to = df[df.index <= target_ts]
-    if len(df_up_to) < 60:
-        return 50.0
-
-    closes = df_up_to['Close'].squeeze()
-    if isinstance(closes, pd.DataFrame):
-        closes = closes.iloc[:, 0]
-
-    close = float(closes.iloc[-1])
-    ma20_all = closes.rolling(window=20).mean()
-    ma60_all = closes.rolling(window=60).mean()
-    ma20 = float(ma20_all.iloc[-1])
-    ma60 = float(ma60_all.iloc[-1])
-
-    p20 = max(0.0, min(20.0, 10.0 + (close - ma20) / ma20 * 200.0))
-    p60 = max(0.0, min(20.0, 10.0 + (close - ma60) / ma60 * 200.0))
-
-    ma20_5d_ago = float(ma20_all.iloc[-6])
-    slope = max(0.0, min(30.0, 15.0 + (ma20 - ma20_5d_ago) / ma20_5d_ago * 1000.0))
-
-    ret_5d = (close - float(closes.iloc[-6])) / float(closes.iloc[-6]) * 100.0
-    momentum = max(0.0, min(30.0, 15.0 + ret_5d * 3.0))
-
-    return float(p20 + p60 + slope + momentum)
+from utils.regime import regime_score_at
 
 
 class Precomputer:
@@ -73,6 +46,7 @@ class Precomputer:
         self.db_path = db_path
         cfg = _load_config()
         pattern_cfg = cfg.get("pattern", {})
+        self.top_sector_count = int(cfg.get("scanner", {}).get("top_sector_count", 10))
 
         # PatternRecognizer — 從 config.yaml 讀取，與即時選股保持一致
         self.recognizer = PatternRecognizer(
@@ -83,6 +57,7 @@ class Precomputer:
             long_only=pattern_cfg.get("long_only", True),
             trend_filter=pattern_cfg.get("trend_filter", True),
             volume_dryup=pattern_cfg.get("volume_dryup", True),
+            max_slope_pct=pattern_cfg.get("max_slope_pct", 0.1),
         )
         self.chip_analyzer = ChipAnalyzer(config=cfg)
         self.scorer = StrategyScorer()
@@ -93,17 +68,21 @@ class Precomputer:
             supply_chain_engine=self.supply_eng,
         )
 
-        # 預載入指數歷史資料，用於計算各日市場分數
-        logger.info("[Precomputer] 下載指數歷史資料 (^TWII, ^TWOII)...")
-        self._tse_data = yf.download('^TWII', period="7y", progress=False)
-        self._otc_data = yf.download('^TWOII', period="7y", progress=False)
+        # 預載入指數歷史資料，用於計算各日市場分數 (優先讀 DB，離線可跑)
+        logger.info("[Precomputer] 載入指數歷史資料 (^TWII, ^TWOII)...")
+        self._tse_data = db_module.load_dataframe('^TWII', self.db_path)
+        self._otc_data = db_module.load_dataframe('^TWOII', self.db_path)
+        if self._tse_data.empty or self._otc_data.empty:
+            logger.info("[Precomputer] DB 無指數資料，改由 yfinance 下載...")
+            self._tse_data = yf.download('^TWII', period="7y", progress=False)
+            self._otc_data = yf.download('^TWOII', period="7y", progress=False)
         logger.info("[Precomputer] 指數資料載入完成")
 
     def _get_market_score(self, date_str: str) -> float:
-        """計算指定日期的綜合市場分數 (TSE 60% + OTC 40%)"""
+        """計算指定日期的綜合市場分數 (TSE 60% + OTC 40%，共用 utils.regime)"""
         ts = pd.Timestamp(date_str)
-        tse = _calculate_regime_score(self._tse_data, ts)
-        otc = _calculate_regime_score(self._otc_data, ts)
+        tse = regime_score_at(self._tse_data, ts)
+        otc = regime_score_at(self._otc_data, ts)
         return round(tse * 0.6 + otc * 0.4, 1)
 
     def get_trading_dates(self, start_date: str, end_date: str):
@@ -142,10 +121,15 @@ class Precomputer:
             return
 
         # 第二階段：族群密度與機會分級
+        # 修正：補上「該日」的族群動能排行 (top_sectors_df)。
+        # 舊版傳空 DataFrame → sector_score 永遠是常數、A 級永遠不可能出現，
+        # 導致回測驗證的評分邏輯與實盤 (main.py) 不一致。
         sector_densities = self.conv_scan.calculate_sector_density(
             converging_results, list(valid_data.keys()))
+        top_sectors_df = self.sector_eng.get_top_sectors(
+            valid_data, top_n=self.top_sector_count)
         opportunities = self.conv_scan.classify_opportunities(
-            converging_results, sector_densities, valid_data)
+            converging_results, sector_densities, valid_data, top_sectors_df)
         opp_map = {o.ticker: o for o in opportunities}
 
         # 第三階段：綜合評分
@@ -153,7 +137,7 @@ class Precomputer:
         for res in converging_results:
             ticker = res.ticker
             opp = opp_map.get(ticker)
-            s_score = self.sector_eng.get_sector_score(ticker, pd.DataFrame())  # 無即時族群排行
+            s_score = self.sector_eng.get_sector_score(ticker, top_sectors_df)
             d_score = opp.density_score if opp else 0
             c_score = self.supply_eng.get_chain_score(ticker, valid_data)
 

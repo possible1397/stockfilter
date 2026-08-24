@@ -16,14 +16,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import yfinance as yf
 import pandas as pd
 import data.database as db_module
-from data.cleaner import DataCleaner
 from backtest.engine import BacktestEngine, BacktestConfig
 from backtest.report import generate_report
 
 # ── CLI 參數 ─────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="台股三角收斂回測")
-parser.add_argument("--start", default="2020-07-01",
-                    help="回測起始日 (預設 2020-07-01，跳過 COVID 崩盤異常期)")
+parser.add_argument("--start", default="2020-01-01",
+                    help="回測起始日 (預設 2020-01-01，刻意包含 COVID 崩盤壓力測試期)")
 parser.add_argument("--end", default="2026-03-26", help="回測結束日")
 parser.add_argument("--no-next-open", action="store_true",
                     help="以當日收盤進場 (預設: 次日開盤)")
@@ -69,7 +68,8 @@ with sqlite3.connect(db_module.DB_PATH) as conn:
 print(f"    符合條件 (>=200 bars): {len(rows)} 檔")
 
 # ── 載入 OHLCV 資料 ───────────────────────────────────────────────────────────
-cleaner = DataCleaner()
+# 注意：不在此處用「最新 5 日均量」過濾股票池 — 那等於用今天的流動性
+# 篩選歷史 (前視偏差)。流動性改由回測引擎在「訊號當下」逐日檢查。
 stock_data = {}
 
 print(f"[2] 載入前 {args.max_tickers} 檔股票資料...")
@@ -77,8 +77,7 @@ for ticker, bars in rows[:args.max_tickers]:
     df = db_module.load_dataframe(ticker)
     if df.empty:
         continue
-    if cleaner.is_valid(ticker, df):
-        stock_data[ticker] = df
+    stock_data[ticker] = df
 
 print(f"    成功載入: {len(stock_data)} 檔\n")
 
@@ -88,7 +87,8 @@ config = BacktestConfig.from_yaml(args.config)
 config.start_date = args.start
 config.end_date = args.end
 config.entry_on_next_open = not args.no_next_open
-config.require_breakout = args.breakout_only
+if args.breakout_only:
+    config.require_breakout = True
 config.min_grade = args.min_grade
 if args.market_threshold is not None:
     config.market_threshold = args.market_threshold
@@ -150,9 +150,11 @@ for reason, cnt in exit_reasons.most_common():
     pct = cnt / len(trades) * 100
     print(f"  {reason}: {cnt} ({pct:.1f}%)")
 
-# ── Benchmark 比較 (^TWII 買進持有) ──────────────────────────────────────────
+# ── Benchmark 比較 ────────────────────────────────────────────────────────────
+# ^TWII 是「價格指數」不含股息，拿來比含息的策略報酬會高估 alpha 約 3~4%/年。
+# 另加 0050.TW 還原價 (含息) 作為較公平的基準。
 benchmark_return = None
-print("\n[6] 計算 Benchmark (^TWII 買進持有)...")
+print("\n[6] 計算 Benchmark...")
 try:
     twii = yf.download('^TWII', start=config.start_date, end=config.end_date,
                        progress=False)
@@ -161,13 +163,28 @@ try:
         bm_start = float(closes.dropna().iloc[0])
         bm_end = float(closes.dropna().iloc[-1])
         benchmark_return = (bm_end / bm_start - 1) * 100
-        alpha = metrics.total_return_pct - benchmark_return
-        alpha_str = f"+{alpha:.1f}%" if alpha >= 0 else f"{alpha:.1f}%"
-        print(f"  ^TWII 買進持有: {benchmark_return:.1f}%")
-        print(f"  策略總報酬:     {metrics.total_return_pct:.1f}%")
-        print(f"  Alpha:          {alpha_str}")
+        print(f"  ^TWII 買進持有 (不含息): {benchmark_return:.1f}%")
 except Exception as e:
-    print(f"  [!] Benchmark 下載失敗: {e}")
+    print(f"  [!] ^TWII 下載失敗: {e}")
+
+try:
+    etf = yf.download('0050.TW', start=config.start_date, end=config.end_date,
+                      auto_adjust=True, progress=False)
+    if not etf.empty:
+        closes = etf['Close'].squeeze()
+        bm_start = float(closes.dropna().iloc[0])
+        bm_end = float(closes.dropna().iloc[-1])
+        etf_return = (bm_end / bm_start - 1) * 100
+        benchmark_return = etf_return  # 以含息基準為主
+        print(f"  0050.TW 買進持有 (含息): {etf_return:.1f}%")
+except Exception as e:
+    print(f"  [!] 0050.TW 下載失敗: {e}")
+
+if benchmark_return is not None:
+    alpha = metrics.total_return_pct - benchmark_return
+    alpha_str = f"+{alpha:.1f}%" if alpha >= 0 else f"{alpha:.1f}%"
+    print(f"  策略總報酬:     {metrics.total_return_pct:.1f}%")
+    print(f"  Alpha (對含息基準): {alpha_str}")
 
 # ── 生成報告 ──────────────────────────────────────────────────────────────────
 print("\n[7] 生成回測報告...")

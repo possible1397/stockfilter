@@ -47,7 +47,8 @@ class PatternRecognizer:
 
     def __init__(self, order: int = 5, min_points: int = 3,
                  min_bars: int = 20, convergence_threshold: float = 0.3,
-                 long_only: bool = True, trend_filter: bool = True, volume_dryup: bool = True):
+                 long_only: bool = True, trend_filter: bool = True, volume_dryup: bool = True,
+                 max_slope_pct: float = 0.1):
         self.order = order
         self.min_points = min_points
         self.min_bars = min_bars
@@ -55,6 +56,9 @@ class PatternRecognizer:
         self.long_only = long_only
         self.trend_filter = trend_filter
         self.volume_dryup = volume_dryup
+        # 斜率門檻 (%/日)。修正：舊版用絕對價格單位 (0.05 元/日)，
+        # 對 1000 元和 10 元的股票意義完全不同，會系統性偏向特定價位帶。
+        self.max_slope_pct = max_slope_pct
 
     def _find_pivot_points(self, df: pd.DataFrame):
         """
@@ -100,17 +104,37 @@ class PatternRecognizer:
         vol_col   = 'Volume' if 'Volume' in df.columns else 'volume'
 
         # --- 實戰濾網 1: 大趨勢濾網 ---
-        if self.trend_filter and len(df) >= 200:
-            sma50  = df[close_col].rolling(window=50).mean().iloc[-1]
-            sma200 = df[close_col].rolling(window=200).mean().iloc[-1]
-            current_close = df[close_col].iloc[-1]
-            result.diag_close  = float(current_close)
-            result.diag_sma50  = float(sma50)
-            result.diag_sma200 = float(sma200)
-            if not (current_close > sma50 and sma50 > sma200):
+        # 修正：舊版在資料 < 200 根時「直接跳過」濾網，新上市股完全不受
+        # 趨勢約束。改為: >= 200 根用完整條件 (close > SMA50 > SMA200)，
+        # 50~199 根用退化條件 (close > SMA50 且 SMA50 向上)，< 50 根直接不合格。
+        if self.trend_filter:
+            current_close = float(df[close_col].iloc[-1])
+            result.diag_close = current_close
+
+            if len(df) < 50:
                 result.failure_stage = "TREND"
-                result.reason = f"close {current_close:.2f} < SMA50 {sma50:.2f} or SMA50 < SMA200 {sma200:.2f}"
+                result.reason = f"資料僅 {len(df)} 根，不足以判斷趨勢"
                 return result
+
+            sma50_all = df[close_col].rolling(window=50).mean()
+            sma50 = float(sma50_all.iloc[-1])
+            result.diag_sma50 = sma50
+
+            if len(df) >= 200:
+                sma200 = float(df[close_col].rolling(window=200).mean().iloc[-1])
+                result.diag_sma200 = sma200
+                if not (current_close > sma50 and sma50 > sma200):
+                    result.failure_stage = "TREND"
+                    result.reason = (f"close {current_close:.2f} < SMA50 {sma50:.2f} "
+                                     f"or SMA50 < SMA200 {sma200:.2f}")
+                    return result
+            else:
+                sma50_10d_ago = float(sma50_all.iloc[-11]) if len(df) >= 60 else sma50
+                if not (current_close > sma50 and sma50 >= sma50_10d_ago):
+                    result.failure_stage = "TREND"
+                    result.reason = (f"新股退化條件不符: close {current_close:.2f} "
+                                     f"vs SMA50 {sma50:.2f} (需 > 且 SMA50 向上)")
+                    return result
 
         # --- 實戰濾網 2: 籌碼量縮濾網 (VCP) ---
         if self.volume_dryup and len(df) >= 50:
@@ -147,15 +171,28 @@ class PatternRecognizer:
             result.reason = "線性回歸失敗 (數據不足)"
             return result
 
+        # 斜率正規化為 %/日 (除以現價)，使門檻與股價高低無關
+        ref_price = float(df[close_col].iloc[-1])
+        if ref_price <= 0:
+            result.failure_stage = "SLOPE"
+            result.reason = "現價 <= 0，無法正規化斜率"
+            return result
+        slope_up_pct   = slope_up   / ref_price * 100.0
+        slope_down_pct = slope_down / ref_price * 100.0
+
         if self.long_only:
-            if not (slope_down > slope_up and slope_up <= 0.05 and slope_down > 0):
+            if not (slope_down > slope_up and slope_up_pct <= self.max_slope_pct
+                    and slope_down > 0):
                 result.failure_stage = "SLOPE"
-                result.reason = f"slope_dn {slope_down:.5f} slope_up {slope_up:.5f} 不符做多條件"
+                result.reason = (f"slope_dn {slope_down_pct:.4f}%/d "
+                                 f"slope_up {slope_up_pct:.4f}%/d 不符做多條件")
                 return result
         else:
-            if not (slope_down > slope_up and slope_up <= 0.05 and slope_down >= -0.05):
+            if not (slope_down > slope_up and slope_up_pct <= self.max_slope_pct
+                    and slope_down_pct >= -self.max_slope_pct):
                 result.failure_stage = "SLOPE"
-                result.reason = f"slope_dn {slope_down:.5f} slope_up {slope_up:.5f} 不符條件"
+                result.reason = (f"slope_dn {slope_down_pct:.4f}%/d "
+                                 f"slope_up {slope_up_pct:.4f}%/d 不符條件")
                 return result
 
         start_idx = int(min(recent_peaks[0], recent_valleys[0]))
@@ -199,9 +236,11 @@ class PatternRecognizer:
             if vol_today > vol_5d * 1.5:
                 is_breakout = True
             else:
-                result.failure_stage = "BREAKOUT"
-                result.reason = f"量不足 {vol_today:.0f} < {float(vol_5d):.0f}×1.5"
-                return result
+                # 修正：站上壓力但量能不足 → 降級為「收斂中」而非整檔剔除。
+                # 舊版在最關鍵的突破日直接讓訊號消失，隔天已站上壓力線
+                # 就再也回不到收斂清單。
+                result.reason = (f"突破量不足 ({vol_today:.0f} < "
+                                 f"{float(vol_5d):.0f}×1.5)，降級為收斂中")
         elif current_price < support_end:
             result.failure_stage = "BREAKOUT"
             result.reason = f"跌破支撐 {current_price:.2f} < {support_end:.2f}"
@@ -224,8 +263,10 @@ class PatternRecognizer:
     def _calculate_pattern_score(self, result: TriangleResult, df: pd.DataFrame,
                                  high_col: str = 'High', low_col: str = 'Low') -> float:
         """量化型態品質 (0-100)"""
-        balance = abs(result.slope_up + result.slope_down)
-        balance_score = max(0, 40 - (balance * 100))
+        # 對稱度以 %/日 衡量 (正規化)，避免高價股永遠拿低分
+        ref_price = result.current_price if result.current_price > 0 else 1.0
+        balance = abs(result.slope_up + result.slope_down) / ref_price * 100.0
+        balance_score = max(0, 40 - (balance * 40))
 
         conv_score = max(0, 40 * (1 - result.convergence_ratio))
 

@@ -145,8 +145,11 @@ def _build_action_plan(result, atr: float, cfg: dict) -> tuple:
     target_price   = round(entry_ref * (1 + take_profit_pct), 2)
     atr_trail_stop = round(entry_ref - atr * atr_mult, 2)
 
+    partial_thresh = float(bt.get("partial_profit_threshold", 0))
     profit_str = (f"目標停利:{target_price} (進場價+{take_profit_pct*100:.0f}%)"
                   if take_profit_pct > 0 else "停利:ATR追蹤決定出場")
+    if partial_thresh > 0:
+        profit_str += f" (獲利>{partial_thresh*100:.0f}%時減碼一半)"
 
     if result.is_breakout:
         action = (f"【{status_str}】次日開盤介入 "
@@ -408,6 +411,7 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
         long_only=_pattern.get("long_only", True),
         trend_filter=_pattern.get("trend_filter", True),
         volume_dryup=_pattern.get("volume_dryup", True),
+        max_slope_pct=_pattern.get("max_slope_pct", 0.1),
     )
     visualizer = Visualizer(output_dir=OUTPUT_DIR)
     sector_eng = SectorRotationEngine()

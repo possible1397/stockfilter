@@ -3648,11 +3648,11 @@
     "themes": []
   },
   "2601.TW": {
-    "primary": "貿易百貨",
+    "primary": "航運業",
     "themes": []
   },
   "2601": {
-    "primary": "貿易百貨",
+    "primary": "航運業",
     "themes": []
   },
   "2603.TW": {
@@ -5891,6 +5891,14 @@
     "primary": "汽車工業",
     "themes": []
   },
+  "4582.TW": {
+    "primary": "綠能環保業",
+    "themes": []
+  },
+  "4582": {
+    "primary": "綠能環保業",
+    "themes": []
+  },
   "4583.TW": {
     "primary": "電機機械",
     "themes": []
@@ -6305,6 +6313,14 @@
   },
   "5234": {
     "primary": "光電業",
+    "themes": []
+  },
+  "5236.TW": {
+    "primary": "半導體業",
+    "themes": []
+  },
+  "5236": {
+    "primary": "半導體業",
     "themes": []
   },
   "5243.TW": {
@@ -7793,14 +7809,6 @@
     "primary": "電子零組件業",
     "themes": []
   },
-  "6806.TW": {
-    "primary": "綠能環保業",
-    "themes": []
-  },
-  "6806": {
-    "primary": "綠能環保業",
-    "themes": []
-  },
   "6807.TW": {
     "primary": "居家生活業",
     "themes": []
@@ -8081,6 +8089,14 @@
     "primary": "綠能環保業",
     "themes": []
   },
+  "6947.TW": {
+    "primary": "綠能環保業",
+    "themes": []
+  },
+  "6947": {
+    "primary": "綠能環保業",
+    "themes": []
+  },
   "6949.TW": {
     "primary": "生技醫療業",
     "themes": []
@@ -8183,6 +8199,14 @@
   },
   "7631": {
     "primary": "其他電子業",
+    "themes": []
+  },
+  "7689.TW": {
+    "primary": "通信網路業",
+    "themes": []
+  },
+  "7689": {
+    "primary": "通信網路業",
     "themes": []
   },
   "7705.TW": {
@@ -8345,6 +8369,22 @@
     "primary": "生技醫療業",
     "themes": []
   },
+  "7803.TW": {
+    "primary": "生技醫療業",
+    "themes": []
+  },
+  "7803": {
+    "primary": "生技醫療業",
+    "themes": []
+  },
+  "7818.TW": {
+    "primary": "綠能環保業",
+    "themes": []
+  },
+  "7818": {
+    "primary": "綠能環保業",
+    "themes": []
+  },
   "7821.TW": {
     "primary": "汽車工業",
     "themes": []
@@ -8366,6 +8406,22 @@
     "themes": []
   },
   "7823": {
+    "primary": "數位雲端業",
+    "themes": []
+  },
+  "7827.TW": {
+    "primary": "生技醫療業",
+    "themes": []
+  },
+  "7827": {
+    "primary": "生技醫療業",
+    "themes": []
+  },
+  "7835.TW": {
+    "primary": "數位雲端業",
+    "themes": []
+  },
+  "7835": {
     "primary": "數位雲端業",
     "themes": []
   },

@@ -19,24 +19,36 @@ pattern:
   long_only: true                 # 只做多
   trend_filter: true              # 是否要求大趨勢偏多 (收盤 > 50MA > 200MA)
   volume_dryup: true              # 是否要求尾端量縮
+  max_slope_pct: 0.1              # 壓力線斜率上限 (%/日，已正規化，與股價高低無關)
 
 cleaner:
   min_vol_lots: 500               # 5 日均量最低門檻 (張)
   min_bars: 60                    # 最少需要幾根 K 線
 
 backtest:
-  score_threshold: 60             # 進場評分門檻
+  # 2026-07-11 五年重驗 (訓練 2021-09~2024-12 / 保留 2025-01~2026-03)。
+  # 訊號級檢驗: 只有 Breakout 訊號有 alpha (20日超額 +1.5pp / 60日 +2.9pp,
+  # p<0.001)，且為右偏分布 (勝率 43%)，需要寬出場 + 60 日時間尺度。
+  # 綜合評分無預測力 (score>=45 反而更差) → 門檻設 0，只依賴突破確認。
+  # 此組為 5 年資料上唯一訓練/保留兩期皆正的配置 (F1)。
+  score_threshold: 0              # 綜合評分經 5 年驗證無預測力，不再作為進場條件
   max_positions: 5                # 最大同時持倉數
   position_size: 0.2              # 每筆倉位佔資金比例
-  stop_loss: 0.07                 # 停損比例
-  take_profit: 0                  # 停利比例 (0 = 停用，由 ATR 追蹤停損自然決定出場)
-  max_hold_days: 0                # 最大持倉天數 (0 = 停用，由 ATR 追蹤停損自然決定出場)
+  stop_loss: 0.10                 # 停損比例 (放寬: 訊號 alpha 需 60 日發酵，-7% 太緊)
+  take_profit: 0                  # 停利比例 (0 = 停用)
+  max_hold_days: 60               # 時間出場: 配合訊號 60 日 alpha 尺度
+  atr_stop_mult: 4.0              # ATR 追蹤停損倍數
+  atr_activate_pct: 15.0          # 追蹤停損啟動門檻 (浮盈 %；太早啟動會砍掉長尾贏家)
+  require_breakout: true          # 只進突破確認訊號 (唯一有 alpha 的訊號類型)
   commission: 0.001425            # 手續費
   tax: 0.003                      # 交易稅
   slippage: 0.001                 # 滑價
   # --- 進階出場策略 ---
-  partial_profit_threshold: 0.15  # 階梯減碼：獲利達此比例時賣出一半 (0 = 停用)
-  partial_profit_ratio: 0.5       # 減碼比例 (0.5 = 賣出 50%)
+  # 2026-08-24: 依 docs/策略規格_凍結版_2026-07-11.md 停用分批停利。
+  # 五年回測顯示右偏報酬分布下「先減碼一半」會截斷長尾贏家、停損卻永遠全倉，
+  # 倉位加權後每筆期望值 -0.97%。0 = 停用 (backtest/paper_trader/position_manager 皆以 >0 判斷)。
+  partial_profit_threshold: 0     # 分批停利門檻 (0 = 停用，凍結規格)
+  partial_profit_ratio: 0.5       # 減碼比例 (threshold=0 時不生效)
   dynamic_atr_update: true        # 動態 ATR：每日重新計算 ATR 而非固定進場日數值
   k_line_trail: true              # K 線追蹤：強勢股改用前日低點或收盤作為追蹤停損
 

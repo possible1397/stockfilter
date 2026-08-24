@@ -24,6 +24,7 @@ from core.recognizer import PatternRecognizer
 from core.market_regime import MarketRegimeDetector
 from backtest.metrics import calculate_metrics, BacktestMetrics
 from utils.indicators import calculate_atr
+from utils.regime import regime_score_at
 
 
 def _today_str() -> str:
@@ -89,11 +90,17 @@ class BacktestConfig:
     # 族群濾網
     min_grade: str = ""              # "" = 不限, "B" = 只進 A/B, "A" = 只進 A
 
+    # 流動性濾網 (進場當下檢查，避免用「今天的流動性」篩選歷史 = 前視偏差)
+    min_vol_lots: int = 500          # 進場前 5 日均量最低門檻 (張)，0 = 停用
+
     # 進階出場策略
     partial_profit_threshold: float = 15.0   # 獲利 % 達此門檻觸發減碼 (0 = 停用)
     partial_profit_ratio: float = 0.5        # 減碼比例
     dynamic_atr_update: bool = True          # 每日重算 ATR
     k_line_trail: bool = True                # 強勢股用前日 K 線追蹤
+    kline_activate_pct: float = None         # K 線追蹤獨立啟動門檻 (None = 同 atr_activate_pct)
+                                             # 兩段式出場: 浮盈 8~15% 用較寬的 ATR，
+                                             # 深浮盈後才切換到較緊的前日低點追蹤
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "BacktestConfig":
@@ -111,10 +118,14 @@ class BacktestConfig:
                 stop_loss_pct=-abs(float(bt.get("stop_loss", 0.07)) * 100),
                 take_profit_pct=float(bt.get("take_profit", 0.20)) * 100,
                 max_hold_days=int(bt.get("max_hold_days", 30)),
+                atr_stop_mult=float(bt.get("atr_stop_mult", 3.0)),
+                atr_activate_pct=float(bt.get("atr_activate_pct", 5.0)),
+                require_breakout=bool(bt.get("require_breakout", False)),
                 commission_rate=float(bt.get("commission", 0.001425)),
                 tax_rate=float(bt.get("tax", 0.003)),
                 slippage_rate=float(bt.get("slippage", 0.001)),
                 market_threshold=float(sc.get("market_score_threshold", 40.0)),
+                min_vol_lots=int(cfg.get("cleaner", {}).get("min_vol_lots", 500)),
                 long_only=bool(pat.get("long_only", True)),
                 trend_filter=bool(pat.get("trend_filter", True)),
                 volume_dryup=bool(pat.get("volume_dryup", True)),
@@ -163,19 +174,29 @@ class BacktestEngine:
         self.trades: list[Trade] = []
         self.active_positions: dict = {}
         self.market_data: Dict[str, pd.DataFrame] = {}
+        self.daily_equity: list = []
 
     def _load_market_data(self):
-        """下載指數歷史資料 (TSE/OTC)"""
-        if self.config.use_market_filter:
-            print("[Backtest] 正在下載指數資料 (^TWII, ^TWOII)...")
-            self.market_data['TSE'] = yf.download('^TWII', period="7y", progress=False)
-            self.market_data['OTC'] = yf.download('^TWOII', period="7y", progress=False)
+        """載入指數歷史資料 (TSE/OTC) — 優先讀 SQLite 快取，離線也能回測"""
+        if not self.config.use_market_filter:
+            return
+        import data.database as db_module
+        for key, ticker in (('TSE', '^TWII'), ('OTC', '^TWOII')):
+            df = db_module.load_dataframe(ticker)
+            if df is None or df.empty:
+                print(f"[Backtest] DB 無 {ticker}，改由 yfinance 下載...")
+                try:
+                    df = yf.download(ticker, period="7y", progress=False)
+                except Exception as e:
+                    print(f"[Backtest] {ticker} 下載失敗: {e}")
+                    df = None
+            self.market_data[key] = df
 
     def _get_market_score(self, date_str: str) -> float:
-        """計算特定日期的市場分數 (與 MarketRegimeDetector 同邏輯)"""
+        """計算特定日期的市場分數 (共用 utils.regime 實作，與實盤一致)"""
         target_ts = pd.Timestamp(date_str)
-        tse_score = self._calculate_regime_score(self.market_data.get('TSE'), target_ts)
-        otc_score = self._calculate_regime_score(self.market_data.get('OTC'), target_ts)
+        tse_score = regime_score_at(self.market_data.get('TSE'), target_ts)
+        otc_score = regime_score_at(self.market_data.get('OTC'), target_ts)
         return round(tse_score * 0.6 + otc_score * 0.4, 1)
 
     def _is_index_above_ma200(self, date_str: str) -> bool:
@@ -195,34 +216,6 @@ class BacktestEngine:
             return True  # MA200 為 NaN，不封鎖
         price = float(closes.iloc[-1])
         return price >= ma200
-
-    def _calculate_regime_score(self, df: pd.DataFrame, target_ts: pd.Timestamp) -> float:
-        if df is None or df.empty:
-            return 0.0
-        df_up_to = df[df.index <= target_ts]
-        if len(df_up_to) < 60:
-            return 50.0
-
-        closes = df_up_to['Close'].squeeze()
-        if isinstance(closes, pd.DataFrame):
-            closes = closes.iloc[:, 0]
-
-        close = float(closes.iloc[-1])
-        ma20_all = closes.rolling(window=20).mean()
-        ma60_all = closes.rolling(window=60).mean()
-        ma20 = float(ma20_all.iloc[-1])
-        ma60 = float(ma60_all.iloc[-1])
-
-        p20 = max(0.0, min(20.0, 10.0 + (close - ma20) / ma20 * 200.0))
-        p60 = max(0.0, min(20.0, 10.0 + (close - ma60) / ma60 * 200.0))
-
-        ma20_5d_ago = float(ma20_all.iloc[-6])
-        slope = max(0.0, min(30.0, 15.0 + (ma20 - ma20_5d_ago) / ma20_5d_ago * 1000.0))
-
-        ret_5d = (close - float(closes.iloc[-6])) / float(closes.iloc[-6]) * 100.0
-        momentum = max(0.0, min(30.0, 15.0 + ret_5d * 3.0))
-
-        return float(p20 + p60 + slope + momentum)
 
     def _calculate_transaction_cost(self, is_buy: bool) -> float:
         """計算交易成本比率"""
@@ -276,8 +269,13 @@ class BacktestEngine:
 
         # 4 & 5. 追蹤停損 — 浮盈超過啟動門檻後才啟動
         if current_return >= self.config.atr_activate_pct:
-            # 4a. K 線追蹤停損 (優先檢查)
-            if self.config.k_line_trail and df_up_to is not None and len(df_up_to) >= 2:
+            # 4a. K 線追蹤停損 (優先檢查)。兩段式: kline_activate_pct 可設得比
+            # atr_activate_pct 高，讓浮盈初期只用較寬的 ATR 追蹤
+            kline_act = (self.config.kline_activate_pct
+                         if self.config.kline_activate_pct is not None
+                         else self.config.atr_activate_pct)
+            if (self.config.k_line_trail and current_return >= kline_act
+                    and df_up_to is not None and len(df_up_to) >= 2):
                 prev_bar = df_up_to.iloc[-2]
                 prev_low = float(prev_bar['Low'])
                 prev_close_val = float(prev_bar['Close'])
@@ -286,6 +284,7 @@ class BacktestEngine:
                 current_atr_stop = pos.get('trailing_stop', 0)
                 if kline_stop > current_atr_stop:
                     pos['trailing_stop'] = kline_stop
+                    pos['stop_source'] = 'kline'
 
             if self.config.use_ma20_trail and ma20 is not None:
                 # MA20 追蹤停損：收盤跌破月線出場
@@ -298,10 +297,18 @@ class BacktestEngine:
                     pos['highest'] = high
                     highest = high
                 trailing_stop = highest - pos['atr'] * self.config.atr_stop_mult
-                pos['trailing_stop'] = max(pos.get('trailing_stop', 0), trailing_stop)
+                if trailing_stop > pos.get('trailing_stop', 0):
+                    pos['trailing_stop'] = trailing_stop
+                    pos['stop_source'] = 'atr'
                 if low <= pos['trailing_stop']:
-                    exit_reason = 'kline_stop' if self.config.k_line_trail else 'atr_stop'
-                    return (pos['trailing_stop'], exit_reason)
+                    # 修正：跳空開低越過停損價時，實際只能成交在開盤價，
+                    # 不能假設成交在停損價 (舊版高估出場價)
+                    open_px = float(current_bar['Open'])
+                    fill_price = min(open_px, pos['trailing_stop']) \
+                        if open_px < pos['trailing_stop'] else pos['trailing_stop']
+                    exit_reason = ('kline_stop'
+                                   if pos.get('stop_source') == 'kline' else 'atr_stop')
+                    return (fill_price, exit_reason)
         else:
             # 未達啟動門檻仍追蹤最高價，等待啟動
             if high > pos.get('highest', entry_price):
@@ -359,6 +366,7 @@ class BacktestEngine:
         """執行回測"""
         self.trades = []
         self.active_positions = {}
+        self.daily_equity: list = []  # [(date_str, equity), ...] 供 metrics 計算日淨值指標
         pending_entries: dict = {}  # ticker -> signal dict，等待次日開盤進場
 
         # 投資組合淨值追蹤
@@ -372,7 +380,19 @@ class BacktestEngine:
         if scan_results_by_date is None:
             scan_results_by_date = self._run_daily_scan(stock_data)
 
-        all_dates = sorted(scan_results_by_date.keys())
+        # 修正：交易日曆 = 掃描日 ∪ 全體個股交易日。
+        # 舊版只走訪 scan_results 的日期，「零訊號的日子」不會檢查出場，
+        # 停損/停利會延遲觸發到下一個有訊號的日子。
+        calendar = set(scan_results_by_date.keys())
+        start_d, end_d = self.config.start_date, self.config.end_date
+        for df in stock_data.values():
+            if df is None or df.empty:
+                continue
+            for d in df.index:
+                ds = str(d.date())
+                if start_d <= ds <= end_d:
+                    calendar.add(ds)
+        all_dates = sorted(d for d in calendar if start_d <= d <= end_d)
         print(f"[Backtest] 回測期間: {all_dates[0]} ~ {all_dates[-1]} ({len(all_dates)} 個交易日)")
         print(f"[Backtest] 參數: score>={self.config.score_threshold} | "
               f"hold<={self.config.max_hold_days}d | SL={self.config.stop_loss_pct}% | "
@@ -434,6 +454,11 @@ class BacktestEngine:
                 if df_up_to.empty:
                     continue
 
+                # 修正：該股今日停牌/無交易時跳過，
+                # 舊版會用「幾天前的舊 K 線」重複檢查出場並累加 hold_days
+                if df_up_to.index[-1] != ts:
+                    continue
+
                 current_bar = df_up_to.iloc[-1]
                 pos['hold_days'] += 1
 
@@ -474,12 +499,19 @@ class BacktestEngine:
                 if df_up.empty:
                     continue
                 cur_price = float(df_up.iloc[-1]['Close'])
-                unrealized += (cur_price / pos['entry_price'] - 1.0) * pos_size * 100.0
-            # 重新從已完成交易累計已實現報酬
-            realized = sum(t.return_pct * pos_size for t in self.trades)
+                # 修正：分批減碼後只剩部分倉位，浮動盈虧需按剩餘比例計算
+                # (舊版按全倉計算，與已實現的 partial 交易重複計入)
+                remaining_frac = (1.0 - self.config.partial_profit_ratio
+                                  if pos.get('partial_done') else 1.0)
+                unrealized += ((cur_price / pos['entry_price'] - 1.0)
+                               * pos_size * remaining_frac * 100.0)
+            # 已實現報酬 — 修正：乘上 position_ratio，分批平倉不重複計算
+            realized = sum(t.return_pct * pos_size * t.position_ratio
+                           for t in self.trades)
             equity = 100.0 + realized + unrealized
             peak_equity = max(peak_equity, equity)
             portfolio_drawdown = (equity - peak_equity) / peak_equity * 100.0
+            self.daily_equity.append((date_str, equity))
 
             # D. 尋找新進場機會 (大盤不安全則不進新單)
             if not market_is_safe:
@@ -529,6 +561,13 @@ class BacktestEngine:
                 if df_up_to.empty:
                     continue
 
+                # 流動性檢查 — 用「訊號當下」的 5 日均量，
+                # 而非回測前用最新資料一次性過濾 (那是前視偏差)
+                if self.config.min_vol_lots > 0:
+                    vol5_lots = float(df_up_to['Volume'].tail(5).mean()) / 1000.0
+                    if vol5_lots < self.config.min_vol_lots:
+                        continue
+
                 if self.config.entry_on_next_open:
                     # 加入 pending，等次日開盤進場
                     pending_entries[ticker] = (signal, df_up_to)
@@ -539,14 +578,23 @@ class BacktestEngine:
                     self._open_position(ticker, signal, entry_price, date_str, df_up_to)
 
         # 強制平倉所有剩餘持倉
+        # 修正：必須以「回測結束日」當時的價格平倉。舊版用 df.iloc[-1]
+        # (整份資料最後一根)，當 end_date 早於資料末端時會吃到未來報酬 (前視)。
+        end_ts = pd.Timestamp(self.config.end_date)
         for ticker, pos in self.active_positions.items():
             df = stock_data.get(ticker)
             if df is None or df.empty:
                 continue
-            last_bar = df.iloc[-1]
+            df_up = df[df.index <= end_ts]
+            if df_up.empty:
+                continue
+            last_bar = df_up.iloc[-1]
             exit_price = float(last_bar['Close'])
-            exit_date = str(df.index[-1].date())
-            self._close_position(ticker, pos, exit_price, exit_date, 'end_of_backtest')
+            exit_date = str(df_up.index[-1].date())
+            remaining = 1.0 - (self.config.partial_profit_ratio
+                               if pos.get('partial_done') else 0)
+            self._close_position(ticker, pos, exit_price, exit_date,
+                                 'end_of_backtest', position_ratio=remaining)
         self.active_positions = {}
 
         print(f"[Backtest] 完成！共 {len(self.trades)} 筆交易")
@@ -614,7 +662,7 @@ class BacktestEngine:
         return results_by_date
 
     def get_metrics(self) -> BacktestMetrics:
-        """取得回測績效指標"""
+        """取得回測績效指標 (以倉位佔比加權 + 日淨值曲線計算)"""
         trade_dicts = [
             {
                 'entry_date': t.entry_date,
@@ -623,10 +671,15 @@ class BacktestEngine:
                 'exit_price': t.exit_price,
                 'return_pct': t.return_pct,
                 'hold_days': t.hold_days,
+                'position_ratio': t.position_ratio,
             }
             for t in self.trades
         ]
-        return calculate_metrics(trade_dicts)
+        return calculate_metrics(
+            trade_dicts,
+            position_size=self.config.position_size_pct / 100.0,
+            daily_equity=getattr(self, 'daily_equity', None),
+        )
 
 
 if __name__ == "__main__":

@@ -55,12 +55,83 @@ class StockFetcher:
                     if (today_date - latest_date).days <= 3:
                         return db_module.load_dataframe(ticker, self.db_path)
 
-                # 增量下載：只補缺少的資料
-                start_date = (latest_date + timedelta(days=1)).strftime('%Y-%m-%d')
-                return self._download_and_save(ticker, start=start_date)
+                # 增量下載：含重疊區比對，偵測除權息/分割後的價格調整
+                return self._incremental_update(ticker, latest_date)
 
         # 無任何快取：下載完整 1 年
         return self._download_and_save(ticker, period="1y")
+
+    # 還原股價一致性檢查參數
+    ADJUSTMENT_TOLERANCE = 0.005   # 重疊區收盤價偏差 > 0.5% 視為發生調整
+    OVERLAP_CALENDAR_DAYS = 14     # 往回重抓多少「日曆天」做比對
+
+    def _drop_incomplete_today(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        盤中執行時移除今日未完成的 K 線。
+        台股 13:30 收盤；14:00 前抓到的當日 bar 是盤中快照，
+        搭配 INSERT OR IGNORE 一旦寫入就永遠不會被收盤後的正確值取代。
+        """
+        if df is None or df.empty:
+            return df
+        try:
+            from zoneinfo import ZoneInfo
+            now_tw = datetime.now(ZoneInfo("Asia/Taipei"))
+        except Exception:
+            now_tw = datetime.now()
+        if now_tw.weekday() < 5 and now_tw.hour < 14:
+            today_str = now_tw.strftime('%Y-%m-%d')
+            if df.index[-1].strftime('%Y-%m-%d') == today_str:
+                df = df.iloc[:-1]
+        return df
+
+    def _incremental_update(self, ticker: str, latest_date) -> pd.DataFrame:
+        """
+        增量下載 + 還原權值一致性檢查：
+        1. 從最後快取日往前 14 天開始下載 (含重疊區)
+        2. 比對重疊區收盤價，偏差 > 0.5% 代表期間發生除權息/分割，
+           yfinance 的還原基準已變 → 整段重抓並覆蓋，避免新舊基準
+           混雜造成序列假跳空
+        3. 無調整則照常 INSERT OR IGNORE 附加新資料
+        """
+        try:
+            stock = yf.Ticker(ticker)
+            overlap_start = (latest_date - timedelta(days=self.OVERLAP_CALENDAR_DAYS))
+            df_new = stock.history(start=overlap_start.strftime('%Y-%m-%d'))
+            df_new = self._drop_incomplete_today(df_new)
+            if df_new is None or df_new.empty:
+                return db_module.load_dataframe(ticker, self.db_path)
+
+            adjusted = False
+            cached = db_module.load_dataframe(ticker, self.db_path)
+            if not cached.empty:
+                new_close = {d.strftime('%Y-%m-%d'): float(c)
+                             for d, c in zip(df_new.index, df_new['Close'])}
+                overlap = cached[cached.index >= pd.Timestamp(overlap_start)]
+                for d, row in overlap.iterrows():
+                    key = d.strftime('%Y-%m-%d')
+                    old_c = float(row['Close'])
+                    if key in new_close and old_c > 0:
+                        if abs(new_close[key] - old_c) / old_c > self.ADJUSTMENT_TOLERANCE:
+                            adjusted = True
+                            break
+
+            if adjusted:
+                logger.info(f"  [{ticker}] 偵測到除權息/分割調整，全量重抓覆蓋舊資料...")
+                df_full = stock.history(period="max")
+                df_full = self._drop_incomplete_today(df_full)
+                if df_full is not None and not df_full.empty:
+                    db_module.save_dataframe(ticker, df_full.copy(),
+                                             self.db_path, replace=True)
+            else:
+                db_module.save_dataframe(ticker, df_new.copy(), self.db_path)
+
+            time.sleep(random.uniform(0.2, 0.6))
+            return db_module.load_dataframe(ticker, self.db_path)
+
+        except Exception as e:
+            logger.error(f"  [{ticker}] 增量更新失敗: {e}")
+            cached = db_module.load_dataframe(ticker, self.db_path)
+            return cached if not cached.empty else pd.DataFrame()
 
     def _download_and_save(self, ticker: str, period: Optional[str] = None, start: Optional[str] = None) -> pd.DataFrame:
         """執行 yfinance 下載並寫入 SQLite，回傳完整 DataFrame"""
@@ -71,6 +142,7 @@ class StockFetcher:
             else:
                 df = stock.history(period=period or "1y")
 
+            df = self._drop_incomplete_today(df)
             if df is None or df.empty:
                 if not start:  # 首次下載才印警告，增量下載無新資料是正常的
                     logger.warning(f"  [{ticker}] 查無資料 (可能已下市或代號不正確)")

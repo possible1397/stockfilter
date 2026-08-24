@@ -1,3 +1,4 @@
+"""core/scorer.py — 綜合評分引擎"""
 from dataclasses import dataclass
 
 
@@ -48,14 +49,15 @@ class StrategyScorer:
         計算總合分
         所有分數均為 0-100 之間
         """
+        # 使用 .get(k, 0) — 自訂權重缺鍵時視為 0，不拋 KeyError
         total = (
-            m_score       * self.weights['market'] +
-            s_score       * self.weights['sector'] +
-            density_score * self.weights['density'] +
-            p_score       * self.weights['pattern'] +
-            b_score       * self.weights['breakout'] +
-            chain_score   * self.weights['chain'] +
-            chip_score    * self.weights['chip']
+            m_score       * self.weights.get('market', 0.0) +
+            s_score       * self.weights.get('sector', 0.0) +
+            density_score * self.weights.get('density', 0.0) +
+            p_score       * self.weights.get('pattern', 0.0) +
+            b_score       * self.weights.get('breakout', 0.0) +
+            chain_score   * self.weights.get('chain', 0.0) +
+            chip_score    * self.weights.get('chip', 0.0)
         )
 
         # A 級機會加分 (最多 +5)
