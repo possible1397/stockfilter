@@ -29,3 +29,13 @@ Thumbs.db
 # Local logs and temp files
 logs/
 scratch/
+
+# SQLite WAL/SHM sidecars
+*.db-wal
+*.db-shm
+
+# Linux FUSE 掛載殘留檔 (Cowork/遠端存取產生)
+.fuse_hidden*
+
+# Git 鎖檔搬移暫存區 (唯讀掛載無法刪除時使用)
+.git/_stale/
