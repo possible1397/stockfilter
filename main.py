@@ -385,15 +385,15 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
             d = info['detail']
             logger.info(f"     {name}: 位置={d['position']:.0f} 斜率={d['slope']:.0f} 動能={d['momentum']:.0f}")
 
-    if FORCE_SAFE_TRADE and m_score < MARKET_SCORE_THRESHOLD:
+    # 大盤濾網只決定「要不要掃描/建議進場」，不決定「要不要更新資料」。
+    # 資料蒐集必須與交易判斷分離：空頭期間反而是最需要累積資料的時候，
+    # 舊版在此直接 return 會讓弱勢盤的每一天都沒有價格與籌碼資料進庫。
+    market_ok = not (FORCE_SAFE_TRADE and m_score < MARKET_SCORE_THRESHOLD)
+    if not market_ok:
         logger.warning(
             f" [!] 市場環境不適合做多 (分數 {m_score:.1f} < {MARKET_SCORE_THRESHOLD})"
         )
-        if '--force' not in sys.argv:
-            logger.warning(" 程式終止。若要強行執行掃描，請加上 --force 參數。")
-            return []
-        else:
-            logger.info(" [!] 已開啟 --force 模式，繼續執行...")
+        logger.info(" [i] 仍會先完成資料更新，之後再決定是否掃描。")
 
     # ============================================================
     # Step 1: 初始化各模組
@@ -430,6 +430,17 @@ def run_scanner(tickers: list, target_date: Optional[datetime] = None):
     
     logger.info(f"[Step 1.2] 批次下載 K 線資料 (目標日: {date_str})...")
     stock_data = fetcher.fetch_batch_data(tickers, max_workers=DOWNLOAD_WORKERS, target_date=target_date)
+
+    # ── 資料已更新完畢，此時才決定要不要繼續掃描 ──────────────────────────
+    if '--data-only' in sys.argv:
+        logger.info(" [i] --data-only 模式：資料更新完成，略過掃描。")
+        return []
+    if not market_ok:
+        if '--force' not in sys.argv:
+            logger.warning(" 資料已更新完成。市場環境不適合做多，略過掃描。")
+            logger.warning(" 若仍要執行掃描，請加上 --force 參數。")
+            return []
+        logger.info(" [!] 已開啟 --force 模式，繼續執行掃描...")
 
     # ============================================================
     # Step 2: 資料清洗
@@ -704,6 +715,8 @@ if __name__ == "__main__":
     parser.add_argument('--update-chip', action='store_true', help='強制更新籌碼資料')
     parser.add_argument('--date', type=str, help='指定掃描日期 (YYYY-MM-DD)')
     parser.add_argument('--force', action='store_true', help='忽略大盤門檻強行執行')
+    parser.add_argument('--data-only', action='store_true',
+                        help='只更新價格與籌碼資料，不執行掃描')
     # 持倉管理指令
     parser.add_argument('--add-position', nargs=4, metavar=('TICKER', 'DATE', 'PRICE', 'SHARES'),
                         help='新增持倉: --add-position 1717.TW 2026-04-08 67.1 2')
