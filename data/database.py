@@ -59,6 +59,15 @@ def init_db(db_path: str = DB_PATH):
                 PRIMARY KEY (ticker, date)
             );
 
+            CREATE TABLE IF NOT EXISTS scan_runs (
+                scan_date    TEXT PRIMARY KEY,
+                computed_at  TEXT,
+                config_hash  TEXT,
+                git_commit   TEXT,
+                n_signals    INTEGER,
+                source       TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS scan_results (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 scan_date       TEXT    NOT NULL,
@@ -77,7 +86,10 @@ def init_db(db_path: str = DB_PATH):
                 status          TEXT,
                 current_price   REAL,
                 convergence_ratio REAL,
-                bar_span        INTEGER
+                bar_span        INTEGER,
+                config_hash     TEXT,
+                git_commit      TEXT,
+                UNIQUE (scan_date, ticker)
             );
 
             CREATE INDEX IF NOT EXISTS idx_scan_results_date
@@ -276,9 +288,33 @@ def get_latest_date(ticker: str, db_path: str = DB_PATH) -> Optional[str]:
         return None
 
 
+def _record_scan_run(db_path: str, scan_date: str, cfg_hash: str,
+                     commit: str, n_signals: int, source: str):
+    """記錄某一天已完成計算（即使訊號 0 筆）。"""
+    from datetime import datetime
+    try:
+        with get_connection(db_path) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO scan_runs
+                    (scan_date, computed_at, config_hash, git_commit, n_signals, source)
+                VALUES (?,?,?,?,?,?)
+            """, (scan_date, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                  cfg_hash, commit, n_signals, source))
+    except Exception as e:
+        logger.error(f"寫入 scan_runs 失敗: {e}")
+
+
 def save_scan_results(db_path: str, scan_date: str, score_results: list,
-                      supply_eng, opp_map: dict):
-    """將本次掃描結果寫入 scan_results 表，供日後歷史查詢。"""
+                      supply_eng, opp_map: dict, source: str = "scanner"):
+    """將本次掃描結果寫入 scan_results 表，供日後歷史查詢。
+
+    每筆都帶上 config_hash 與 git_commit，讓訊號能回溯到當時的參數與程式版本。
+    同時在 scan_runs 記錄「這一天算過了」——訊號 0 筆與尚未計算是兩回事，
+    沒有這張表就分不出來。
+    """
+    from utils.provenance import stamp
+    cfg_hash, commit = stamp()
+    _record_scan_run(db_path, scan_date, cfg_hash, commit, len(score_results or []), source)
     if not score_results:
         return
     rows = []
@@ -302,16 +338,21 @@ def save_scan_results(db_path: str, scan_date: str, score_results: list,
             pattern.current_price     if pattern else None,
             pattern.convergence_ratio if pattern else None,
             pattern.bar_span          if pattern else None,
+            cfg_hash,
+            commit,
         ))
     try:
         with get_connection(db_path) as conn:
+            # INSERT OR REPLACE + UNIQUE(scan_date, ticker)：
+            # 同一天重跑掃描會覆蓋而不是插入第二份。
             conn.executemany("""
-                INSERT INTO scan_results
+                INSERT OR REPLACE INTO scan_results
                     (scan_date, ticker, grade, total_score,
                      market_score, sector_score, density_score, chain_score,
-                     chip_score, pattern_score, breakout_score, sector, 
-                     chain_position, status, current_price, convergence_ratio, bar_span)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     chip_score, pattern_score, breakout_score, sector,
+                     chain_position, status, current_price, convergence_ratio, bar_span,
+                     config_hash, git_commit)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, rows)
         logger.debug(f"已儲存 {len(rows)} 筆掃描結果至 scan_results ({scan_date})")
     except Exception as e:
