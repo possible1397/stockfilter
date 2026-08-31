@@ -39,3 +39,6 @@ scratch/
 
 # Git 鎖檔搬移暫存區 (唯讀掛載無法刪除時使用)
 .git/_stale/
+
+# 研究用的中介資料（可由腳本重建）
+research/data/

@@ -114,7 +114,10 @@ def main():
         window = [d for d in tdays if s0 <= d <= d1]
         gaps = [d for d in window if d not in runs]
         print(f"  掃描覆蓋: {len(window) - len(gaps):,} / {len(window):,} 個交易日"
-              f"  缺 {len(gaps):,} 天")
+              f"  無紀錄 {len(gaps):,} 天")
+        print("  註:2026-08-30 之前的舊資料無法分辨「當天 0 筆訊號」與「當天沒算」——")
+        print("      舊版寫入路徑在訊號 0 筆時什麼都不寫。scan_runs 上線後兩者才分得開。")
+        print("      弱勢盤（如 2025-04）本來就可能整段沒有訊號，不必然是缺漏。")
         rows_out.append(("scan_runs", "missing_days", len(gaps)))
         if gaps:
             print(f"  最近的缺漏: {', '.join(gaps[-8:])}")
