@@ -28,8 +28,11 @@ EXPLORE = ("2021-09-01", "2024-12-31")
 HOLDOUT = ("2025-01-01", "2026-05-31")
 
 BINARY = {"is_breakout", "is_converging"}
-SKIP = {"ticker", "date"}
+# 非特徵欄位。fwd_ret_60 是前瞻資料（放進來只為了算超額報酬基準），
+# excess_60 是評估指標 —— 兩者都絕不能當成特徵，也絕不能被分位化覆寫。
+SKIP = {"ticker", "date", "fwd_ret_60", "excess_60"}
 LABEL_COLS = ["flyer_100", "flyer_50", "flyer_120"]
+EXCESS = "excess_60"      # 可交易母體內的 60 日超額報酬
 N_BINS = 10
 
 
@@ -46,7 +49,8 @@ def wilson(k, n, z=1.96):
 
 def analyse(df, feat, label, base):
     rows = []
-    sub = df[[feat, label]].dropna()
+    cols = [feat, label] + ([EXCESS] if EXCESS in df.columns else [])
+    sub = df[cols].dropna(subset=[feat, label])
     if len(sub) < 100:
         return rows
 
@@ -67,6 +71,9 @@ def analyse(df, feat, label, base):
         k = int(g[label].sum())
         rate = k / n
         lo, hi = wilson(k, n)
+        ex = g[EXCESS].dropna() if EXCESS in g else pd.Series(dtype=float)
+        ex_m = ex.mean() if len(ex) else np.nan
+        ex_se = ex.std(ddof=1) / np.sqrt(len(ex)) if len(ex) > 1 else np.nan
         rows.append({
             "feature": feat, "label": label, "bucket": name,
             "n": n, "hits": k,
@@ -75,6 +82,11 @@ def analyse(df, feat, label, base):
             "ci_lo_pct": round(100 * lo, 4), "ci_hi_pct": round(100 * hi, 4),
             "lift_ci_lo": round(lo / base, 3) if base > 0 else np.nan,
             "lift_ci_hi": round(hi / base, 3) if base > 0 else np.nan,
+            "excess_mean_pct": round(100 * ex_m, 4) if np.isfinite(ex_m) else np.nan,
+            "excess_lo_pct": round(100 * (ex_m - 1.96 * ex_se), 4) if np.isfinite(ex_se) else np.nan,
+            "excess_hi_pct": round(100 * (ex_m + 1.96 * ex_se), 4) if np.isfinite(ex_se) else np.nan,
+            "excess_median_pct": round(100 * ex.median(), 4) if len(ex) else np.nan,
+            "excess_winrate_pct": round(100 * (ex > 0).mean(), 2) if len(ex) else np.nan,
         })
     return rows
 
@@ -104,14 +116,20 @@ def main():
 
     print(f"載入資料（{tag}: {start} ~ {end}）...")
     feat = pd.read_parquet(FEATURES)
-    lab = pd.read_parquet(LABELS, columns=["ticker", "date"] + LABEL_COLS)
+    lab = pd.read_parquet(LABELS,
+                          columns=["ticker", "date", "fwd_ret_60"] + LABEL_COLS)
     df = feat.merge(lab, on=["ticker", "date"], how="inner")
     df = df[(df["date"] >= start) & (df["date"] <= end)]
+    # 超額報酬的基準用「可交易母體」（已過流動性門檻），不是全市場
+    df[EXCESS] = (df["fwd_ret_60"]
+                  - df.groupby("date")["fwd_ret_60"].transform("mean"))
     print(f"  {len(df):,} 列 / {df.ticker.nunique():,} 檔 / {df.date.nunique():,} 個交易日")
 
     # 橫斷面分位（同一天內比較）
     cols = [c for c in df.columns if c not in SKIP and c not in LABEL_COLS]
-    print("計算同日橫斷面分位...")
+    leak = [c for c in cols if c.startswith("fwd_") or c.startswith("excess")]
+    assert not leak, f"特徵清單混入前瞻欄位: {leak}"
+    print(f"計算同日橫斷面分位（{len(cols)} 個特徵）...")
     for c in cols:
         if c in BINARY:
             continue
@@ -138,21 +156,38 @@ def main():
 
     # --- 摘要:主標籤下，信賴區間下界仍 > 1 的格子 ---
     main_lb = res[res["label"] == "flyer_100"].copy()
-    strong = main_lb[main_lb["lift_ci_lo"] > 1.0].sort_values("lift", ascending=False)
-    print("\n" + "=" * 78)
-    print("  flyer_100（三個月翻倍）· lift 信賴區間下界 > 1 的分位格，依 lift 排序")
-    print("=" * 78)
+    # 一個特徵要算數，必須「同時」提高命中率與期望報酬。
+    # 只提高命中率的（例如高波動）是標籤造成的陷阱，不是 alpha。
+    strong = main_lb[(main_lb["lift_ci_lo"] > 1.0) &
+                     (main_lb["excess_lo_pct"] > 0)].sort_values(
+                         "excess_mean_pct", ascending=False)
+    print("\n" + "=" * 96)
+    print("  候選:lift 信賴區間下界 > 1 且 超額報酬信賴區間下界 > 0（兩者都要過）")
+    print("  依超額報酬排序 —— 命中率高但不賺錢的不算數")
+    print("=" * 96)
     if strong.empty:
-        print("  沒有任何一格的信賴區間下界超過 1 —— 這本身就是結論。")
+        print("  沒有任何一格同時通過 —— 這本身就是結論。")
     else:
-        print(f"  {'特徵':<22}{'格':<6}{'n':>8}{'命中':>7}{'命中率':>9}"
-              f"{'lift':>7}{'lift 95%CI':>18}")
+        print(f"  {'特徵':<22}{'格':<6}{'n':>8}{'命中率':>8}{'lift':>7}"
+              f"{'超額平均':>10}{'超額95%CI':>20}{'中位數':>9}{'勝率':>7}")
         for _, r in strong.head(25).iterrows():
-            print(f"  {r.feature:<22}{r.bucket:<6}{r.n:>8,}{r.hits:>7,}"
-                  f"{r.rate_pct:>8.2f}%{r.lift:>7.2f}"
-                  f"{f'[{r.lift_ci_lo:.2f}, {r.lift_ci_hi:.2f}]':>18}")
+            ci = "[{:+.2f}%, {:+.2f}%]".format(r.excess_lo_pct, r.excess_hi_pct)
+            print(f"  {r.feature:<22}{r.bucket:<6}{r.n:>8,}{r.rate_pct:>7.2f}%"
+                  f"{r.lift:>7.2f}{r.excess_mean_pct:>9.2f}%{ci:>20}"
+                  f"{r.excess_median_pct:>8.2f}%{r.excess_winrate_pct:>6.1f}%")
         print(f"\n  共 {len(strong)} 格。提醒:20 個特徵 x 10 分位 x 3 標籤 = 600 次檢定，")
         print("  探索期的任何發現都只是候選，真偽由保留期決定（階段 3）。")
+
+    # 對照:只看命中率會挑出哪些（示範標籤陷阱）
+    trap = main_lb[(main_lb["lift_ci_lo"] > 1.5) &
+                   (main_lb["excess_hi_pct"] < 0)].sort_values("lift", ascending=False)
+    if not trap.empty:
+        print("\n" + "-" * 96)
+        print("  標籤陷阱:命中率顯著高、但超額報酬顯著為負的分位格")
+        print("-" * 96)
+        for _, r in trap.head(12).iterrows():
+            print(f"  {r.feature:<22}{r.bucket:<6}{r.n:>8,}  lift {r.lift:>5.2f}"
+                  f"   超額 {r.excess_mean_pct:>+6.2f}%   中位數 {r.excess_median_pct:>+6.2f}%")
 
     # 主標籤與密度標籤是否指向同一批特徵
     print("\n" + "-" * 78)
