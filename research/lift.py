@@ -95,7 +95,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--holdout", action="store_true",
                     help="改跑保留期（階段 3 專用，只能跑一次）")
+    ap.add_argument("--v2", action="store_true",
+                    help="改讀 features_v2.parquet（含月營收特徵）")
     args = ap.parse_args()
+
+    global FEATURES, OUT
+    if args.v2:
+        FEATURES = os.path.join("research", "data", "features_v2.parquet")
+        OUT = os.path.join("output", "lift_table_v2.csv")
 
     if args.holdout:
         print("\n" + "!" * 72)
