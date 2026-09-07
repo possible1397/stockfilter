@@ -17,6 +17,7 @@ research/fetch_revenue.py — 抓月營收（FinMind 免費層，可續跑）
 import argparse
 import json
 import os
+import random
 import sqlite3
 import sys
 import time
@@ -95,6 +96,12 @@ def main():
         "SELECT ticker FROM monthly_revenue_progress WHERE status IN ('ok','empty')")}
     todo = [t for t in tickers if t not in done]
 
+    # 固定種子打亂順序。免費層配額會讓抓取分成很多輪，
+    # 若照代號順序抓，中途停下時拿到的會是「1xxx~2xxx 的傳產與金融」，
+    # 完全沒有 3xxx 以上的電子與上櫃股 —— 那種偏斜的樣本不能拿來做研究。
+    # 打亂之後，任何時點的部分資料都是全市場的隨機子集。
+    random.Random(20260901).shuffle(todo)
+
     n_rows = con.execute("SELECT COUNT(*) FROM monthly_revenue").fetchone()[0]
     print(f"標的總數 {len(tickers):,} ｜ 已完成 {len(done):,} ｜ 待抓 {len(todo):,} "
           f"｜ 現有營收列數 {n_rows:,}")
@@ -107,7 +114,7 @@ def main():
         return 0
     if not todo:
         print("已全部抓完。")
-        return 0
+        return 2          # 給批次檔的迴圈當作結束訊號
 
     todo = todo[:args.limit]
     t0 = time.time()
