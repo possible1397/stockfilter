@@ -27,7 +27,9 @@ OUT = os.path.join("output", "lift_table_v1.csv")
 EXPLORE = ("2021-09-01", "2024-12-31")
 HOLDOUT = ("2025-01-01", "2026-05-31")
 
-BINARY = {"is_breakout", "is_converging"}
+# 0/1 特徵。切十分位對二元變數沒有意義（D1~D8 會全是同一群），
+# 要用值本身分組。
+BINARY = {"is_breakout", "is_converging", "rev_high_12m"}
 # 非特徵欄位。fwd_ret_60 是前瞻資料（放進來只為了算超額報酬基準），
 # excess_60 是評估指標 —— 兩者都絕不能當成特徵，也絕不能被分位化覆寫。
 SKIP = {"ticker", "date", "fwd_ret_60", "excess_60"}
