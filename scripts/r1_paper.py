@@ -45,6 +45,7 @@ MAXHOLD = 60                  # 最長持有交易日
 TRAIL = -0.15                 # B 的移動停利
 COST = 0.006                  # 來回成本（僅用於報表，不影響進出場）
 VARIANTS = {"A_hold60": None, "B_trail15": TRAIL}
+MAX_BACKFILL = 15     # 一次執行最多補幾個交易日
 
 DDL = """
 CREATE TABLE IF NOT EXISTS r1_signals (
@@ -80,10 +81,11 @@ def trading_days(con, n=400):
     return sorted(d["date"].tolist())
 
 
-def compute_signals(con, days):
-    """回傳最後一個交易日的 R1 訊號（已做流動性過濾與事件化）。"""
-    today = days[-1]
-    start = days[max(0, len(days) - 260)]          # 52 週 + 緩衝
+def compute_signals(con, days, i=None):
+    """回傳 days[i] 當天的 R1 訊號（已做流動性過濾與事件化）。"""
+    i = len(days) - 1 if i is None else i
+    today = days[i]
+    start = days[max(0, i - 260)]                  # 52 週 + 緩衝
     px = pd.read_sql(
         "SELECT ticker,date,high,low,close,volume FROM daily_prices "
         "WHERE date >= ? AND ticker NOT LIKE '^%'", con, params=(start,))
@@ -113,7 +115,7 @@ def compute_signals(con, days):
     sig = cur[(cur["hi_r"] >= TOP_PCT) & (cur["rev_r"] >= TOP_PCT)].copy()
 
     # 事件化:過去 GAP 個交易日內已經觸發過的，不算新事件
-    prev = days[max(0, len(days) - 1 - GAP):-1]
+    prev = days[max(0, i - GAP):i]
     if prev:
         q = ("SELECT DISTINCT ticker FROM r1_signals WHERE date IN (%s)"
              % ",".join("?" * len(prev)))
@@ -122,9 +124,10 @@ def compute_signals(con, days):
     return today, sig
 
 
-def advance(con, days):
-    """用最新一天的價格推進所有未平倉部位。"""
-    today = days[-1]
+def advance(con, days, i=None):
+    """用 days[i] 當天的價格推進所有未平倉部位。"""
+    i = len(days) - 1 if i is None else i
+    today = days[i]
     bar = {d: i for i, d in enumerate(days)}
     open_pos = pd.read_sql("SELECT * FROM r1_positions WHERE status='open'", con)
     if open_pos.empty:
@@ -164,12 +167,13 @@ def advance(con, days):
     return closed
 
 
-def open_pending(con, days):
-    """把「昨天的訊號」用今天的開盤價建倉（與研究一致:訊號次日開盤進場）。"""
-    today = days[-1]
-    if len(days) < 2:
+def open_pending(con, days, i=None):
+    """把「前一交易日的訊號」用當天開盤價建倉（與研究一致:訊號次日開盤進場）。"""
+    i = len(days) - 1 if i is None else i
+    today = days[i]
+    if i < 1:
         return 0
-    yday = days[-2]
+    yday = days[i - 1]
     sig = pd.read_sql("SELECT ticker FROM r1_signals WHERE date=?", con, params=(yday,))
     if sig.empty:
         return 0
@@ -240,25 +244,36 @@ def main():
     if len(days) < 2:
         log("交易日不足")
         return 1
-    today = days[-1]
-    done = con.execute("SELECT 1 FROM r1_paper_runs WHERE last_price_date=?",
-                       (today,)).fetchone()
-    if done:
-        log(f"{today} 已處理過，略過。")
+
+    # 逐日補處理:只開機一次也不會漏掉中間的交易日。
+    # （2026-09-12 的教訓:原本只處理最新一天，連續兩天沒開機就會讓
+    #   中間的訊號憑空消失、該觸發的移動停利也漏掉，模擬紀錄會失真。）
+    last = con.execute("SELECT MAX(last_price_date) FROM r1_paper_runs").fetchone()[0]
+    todo = [i for i, d in enumerate(days) if last is None or d > last]
+    if last is None:                       # 第一次執行:只從最新一天開始
+        todo = todo[-1:]
+    todo = todo[-MAX_BACKFILL:]            # 一次最多補這麼多天，避免爆掉
+    if not todo:
+        log(f"{days[-1]} 已處理過，略過。")
         con.close()
         return 0
+    if len(todo) > 1:
+        log(f"偵測到 {len(todo)} 個未處理的交易日（{days[todo[0]]} ~ {days[todo[-1]]}），逐日補上...")
 
-    closed = advance(con, days)
-    opened = open_pending(con, days)
-    _, sig = compute_signals(con, days)
-    for r in sig.itertuples():
-        con.execute("INSERT OR REPLACE INTO r1_signals VALUES (?,?,?,?,?)",
-                    (today, r.ticker, float(r.close),
-                     float(r.pct_from_52w_high), float(r.rev_yoy)))
-    con.execute("INSERT OR REPLACE INTO r1_paper_runs VALUES (?,?,?,?,?,?)",
-                (str(pd.Timestamp.now().date()), today, len(sig), opened, closed, ""))
-    con.commit()
-    log(f"價格日 {today}｜新訊號 {len(sig)}｜建倉 {opened}｜平倉 {closed}")
+    for i in todo:
+        day = days[i]
+        closed = advance(con, days, i)
+        opened = open_pending(con, days, i)
+        _, sig = compute_signals(con, days, i)
+        for r in sig.itertuples():
+            con.execute("INSERT OR REPLACE INTO r1_signals VALUES (?,?,?,?,?)",
+                        (day, r.ticker, float(r.close),
+                         float(r.pct_from_52w_high), float(r.rev_yoy)))
+        con.execute("INSERT OR REPLACE INTO r1_paper_runs VALUES (?,?,?,?,?,?)",
+                    (f"{pd.Timestamp.now().date()}#{day}", day,
+                     len(sig), opened, closed, ""))
+        con.commit()
+        log(f"價格日 {day}｜新訊號 {len(sig)}｜建倉 {opened}｜平倉 {closed}")
     report(con)
     con.close()
     return 0
