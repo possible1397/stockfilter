@@ -25,6 +25,13 @@ import sys
 import numpy as np
 import pandas as pd
 
+# Windows 主控台預設 cp950，印不出 ⚠ 之類的字元會直接丟 UnicodeEncodeError。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "stock_data.db")
 LOG = os.path.join(ROOT, "output", "r1_paper.log")
@@ -216,7 +223,7 @@ def report(con):
     n = con.execute("SELECT COUNT(*) FROM r1_signals").fetchone()[0]
     d = con.execute("SELECT MIN(date),MAX(date) FROM r1_signals").fetchone()
     print(f"\n  累積訊號 {n} 筆（{d[0]} ~ {d[1]}）")
-    print("  ⚠ B_trail15 的 -15% 是階段 4 從 16 組裡挑出來的，尚未經外部驗證。")
+    print("  [!] B_trail15 的 -15% 是階段 4 從 16 組裡挑出來的，尚未經外部驗證。")
     print("     要等兩邊各累積約 100 筆已平倉交易才有比較意義。")
 
 

@@ -1,0 +1,4 @@
+# .bat 必須是 CRLF：cmd.exe 遇到 LF 換行會誤判 for/goto 區塊。
+# 2026-09-12：job_runner.bat 就是因為 LF 而斷斷續續地失效了好幾天。
+*.bat text eol=crlf
+*.cmd text eol=crlf
