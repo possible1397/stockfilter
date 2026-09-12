@@ -25,6 +25,7 @@ FEATURES = os.path.join("research", "data", "features_v2.parquet")
 LABELS = os.path.join("research", "data", "labels.parquet")
 OUT = os.path.join("output", "episodes_v1.csv")
 EXPLORE = ("2021-09-01", "2024-12-31")
+HOLDOUT = ("2025-01-01", "2026-05-31")
 GAP = 5          # 相隔 <= 5 個交易日視為同一個事件
 
 
@@ -41,11 +42,11 @@ def episodes(df, mask, gap=GAP):
     return sel[sel["_first"]]
 
 
-def stats(g, base, label):
+def stats(g, base, label, col="flyer_100"):
     n = len(g)
     if n == 0:
         return None
-    k = float(g["flyer_100"].sum())
+    k = float(g[col].sum())
     ex = g["excess_60"].dropna()
     m = ex.mean() if len(ex) else np.nan
     se = ex.std(ddof=1) / np.sqrt(len(ex)) if len(ex) > 1 else np.nan
@@ -74,11 +75,18 @@ HEAD = (f"  {'組合':<32}{'層級':<6}{'n':>8}{'命中率':>8}{'lift':>7}"
 
 
 def main():
-    print("載入資料...")
+    # --holdout 只改動期間，其餘邏輯完全不動（階段 3 一次性驗證用）
+    hold = "--holdout" in sys.argv
+    period = HOLDOUT if hold else EXPLORE
+    global OUT
+    if hold:
+        OUT = os.path.join("output", "episodes_holdout.csv")
+    print(f"載入資料...（{'保留期' if hold else '探索期'} {period[0]} ~ {period[1]}）")
     feat = pd.read_parquet(FEATURES)
-    lab = pd.read_parquet(LABELS, columns=["ticker", "date", "flyer_100", "fwd_ret_60"])
+    lab = pd.read_parquet(LABELS, columns=["ticker", "date", "flyer_100", "flyer_50",
+                                           "flyer_120", "fwd_ret_60"])
     df = feat.merge(lab, on=["ticker", "date"], how="inner")
-    df = df[(df["date"] >= EXPLORE[0]) & (df["date"] <= EXPLORE[1])]
+    df = df[(df["date"] >= period[0]) & (df["date"] <= period[1])]
     df = df.dropna(subset=["flyer_100"])
     df["excess_60"] = (df["fwd_ret_60"]
                        - df.groupby("date")["fwd_ret_60"].transform("mean"))
@@ -124,6 +132,35 @@ def main():
             print(f"  {'':<32}{'':6}→ 平均每年 {s_ep['n']/years:,.0f} 次訊號，"
                   f"日觀察值 / 事件 = {s_day['n']/s_ep['n']:.1f} 倍")
         print("  " + "·" * 100)
+
+    # ── 三個標籤的事件級 lift ────────────────────────────────────
+    # 主目標的門檻之一是「換第二種標籤（flyer_120）仍 >= 1.5」，
+    # 這是判定階段 3 能不能過關的必要數字。
+    print("\n" + "=" * 104)
+    print("  事件級 · 三個標籤的 lift（主目標門檻:flyer_100 >= 2.0 且 flyer_120 >= 1.5）")
+    print("=" * 104)
+    print(f"  {'組合':<32}{'事件數':>8}"
+          f"{'flyer_100':>12}{'flyer_50':>11}{'flyer_120':>12}")
+    print("  " + "-" * 100)
+    bases = {c: df[c].dropna().mean() for c in ("flyer_100", "flyer_50", "flyer_120")}
+    for lbl, mask in combos:
+        ep = episodes(df, mask)
+        if ep.empty:
+            continue
+        cells = []
+        for c in ("flyer_100", "flyer_50", "flyer_120"):
+            s = stats(ep, bases[c], lbl, col=c)
+            cells.append(f"{s['lift']:.2f}" if s else "—")
+        n_ep = len(ep)
+        mark = ""
+        try:
+            if float(cells[0]) >= 2.0 and float(cells[2]) >= 1.5:
+                mark = "  ← 兩門檻皆過"
+        except ValueError:
+            pass
+        print(f"  {lbl:<32}{n_ep:>8,}{cells[0]:>12}{cells[1]:>11}{cells[2]:>12}{mark}")
+    print(f"\n  基準率:flyer_100 {100*bases['flyer_100']:.3f}%  "
+          f"flyer_50 {100*bases['flyer_50']:.3f}%  flyer_120 {100*bases['flyer_120']:.3f}%")
 
     os.makedirs("output", exist_ok=True)
     pd.DataFrame(rows).to_csv(OUT, index=False, encoding="utf-8-sig")
