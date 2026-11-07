@@ -42,3 +42,6 @@ scratch/
 
 # 研究用的中介資料（可由腳本重建）
 research/data/
+
+# 個人持倉紀錄（程式會在缺檔時自動以空清單啟動）
+my_positions.json
